@@ -5,7 +5,9 @@ import type { Env } from '../src/types.ts';
 import { currentAccount } from '../src/accounts/auth.ts';
 import { authRoute } from '../src/accounts/auth-routes.ts';
 import { githubCallback, githubLogin } from '../src/accounts/github-auth.ts';
-import { encryptHost, decryptHost } from '../src/accounts/crypto.ts';
+import { encryptHost, decryptHost, encryptionKeyBytes } from '../src/accounts/crypto.ts';
+import { apiFailure } from '../src/accounts/http.ts';
+import { verifyGithubDeployment } from '../scripts/deployment-health.ts';
 
 const origin = 'https://ssh.example.com';
 const baseEnv = {
@@ -128,6 +130,36 @@ test('OAuth starts with random state, S256 PKCE and no privileged scopes', async
   assert.ok(first.response.headers.get('Set-Cookie')?.includes('Secure; HttpOnly; SameSite=Lax'));
   assert.match(first.response.headers.get('Set-Cookie')!, /Max-Age=600(?:;|$)/);
   assert.equal(first.authorization.toString().includes(baseEnv.GH_CLIENT_SECRET), false);
+});
+
+test('OAuth accepts standard Base64 encryption keys containing + and / without changing stored data', async () => {
+  // 原固定密钥只有字母数字，掩盖了将标准 Base64 错当 Base64URL 解码的线上故障。
+  for (const byte of [7, 251, 255]) {
+    for (const padded of [true, false]) {
+      const runtime = environment();
+      const encoded = Buffer.alloc(32, byte).toString('base64');
+      runtime.env.ENCRYPTION_KEY = padded ? encoded : encoded.replace(/=+$/, '');
+      const secret = { password: 'existing-host-password' };
+      const ciphertext = await encryptHost(secret, runtime.env.ENCRYPTION_KEY, runtime.state.account_id, 'host-1');
+      const { cookie } = await login(runtime.env);
+      const account = await currentAccount(request('/api/auth/me', cookie), runtime.env);
+      assert.equal(account.username, 'administrator');
+      assert.deepEqual(await decryptHost(ciphertext, runtime.env.ENCRYPTION_KEY, account.id, 'host-1'), secret);
+    }
+  }
+});
+
+test('deployment smoke test exercises the OAuth signer and D1 workspace', async () => {
+  const runtime = environment();
+  runtime.env.ENCRYPTION_KEY = Buffer.alloc(32, 251).toString('base64');
+  await verifyGithubDeployment(new URL(origin).hostname, baseEnv.GH_CLIENT_ID, async (url, init) => {
+    const req = new Request(url, init);
+    if (new URL(req.url).pathname === '/auth/login') return githubLogin(req, runtime.env);
+    try {
+      await currentAccount(req, runtime.env);
+      return Response.json({ authenticated: true });
+    } catch (error) { return apiFailure(error); }
+  });
 });
 
 test('callback binds state to its browser cookie before any token exchange', async () => {
@@ -297,7 +329,7 @@ test('provider round trips preserve encrypted data but never revive an old sessi
 
 test('expired sessions are rejected even with a correct signature and revision', async () => {
   const encoder = new TextEncoder();
-  const material = await crypto.subtle.importKey('raw', base64url.decode(env.ENCRYPTION_KEY), 'HKDF', false, ['deriveBits']);
+  const material = await crypto.subtle.importKey('raw', encryptionKeyBytes(env.ENCRYPTION_KEY), 'HKDF', false, ['deriveBits']);
   const key = new Uint8Array(await crypto.subtle.deriveBits({
     name: 'HKDF', hash: 'SHA-256', salt: encoder.encode('edgessh:v1'), info: encoder.encode('github-oauth-cookie'),
   }, material, 256));

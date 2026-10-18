@@ -10,6 +10,7 @@ import { previewOrigin } from '../src/forwarding/security.ts';
 import { maskSecrets, prepareEncryptionSecret, readWorkerSecretNames, readWorkerVariable } from './deployment-secrets.ts';
 import { prepareAuthentication, requiredAuthSecrets } from './deployment-auth.ts';
 import { readWorkspaceState, updateWorkspaceState } from './workspace-state.ts';
+import { verifyGithubDeployment } from './deployment-health.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const generatedConfig = '.wrangler.generated.toml';
@@ -89,6 +90,10 @@ async function main(): Promise<void> {
   const deployedSecrets = await readWorkerSecretNames(api, settings);
   for (const name of ['ENCRYPTION_KEY', ...requiredAuthSecrets(settings.authProvider)]) {
     if (!deployedSecrets.has(name)) throw new Error(`部署后缺少 Worker Secret：${name}。`);
+  }
+  if (settings.authProvider === 'github') {
+    await verifyGithubDeployment(hostname, settings.githubClientId!);
+    console.log('GitHub 登录入口签名与 D1 工作区验收通过（真实 GitHub 授权仍需管理员登录完成）。');
   }
   // 预览 Worker 只做代理入口和 DO 绑定，不执行迁移、不写入任何 Secret。
   if (settings.deployPreview) {

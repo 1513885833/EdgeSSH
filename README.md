@@ -1,31 +1,37 @@
 <div align="center">
 
-# EdgeSSH
+# EdgeSSH · 开源 WebSSH 工作台
 
-### 你的 SSH 工作台，跑在 Cloudflare 上。
+<p><strong>浏览器里的 SSH 终端与 SFTP 文件管理，运行在你自己的 Cloudflare 上。</strong></p>
 
-**把主机、终端、文件、监控与远程访问，收进一个只属于你自己的 WebSSH 工作台。**
+把主机管理、在线终端、文件传输、进程监控与远程 HTTP 服务预览，收进一个个人服务器管理工作台，无需额外维护 SSH 中转服务器。
 
-Cloudflare-native · Self-hosted · Single-admin · Open source
+<p><sub>An open-source, self-hosted WebSSH client on Cloudflare Workers — browser-based SSH terminal, SFTP file manager, and server monitoring.</sub></p>
 
-<br />
-
-[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![License](https://img.shields.io/badge/License-Apache%202.0-546E7A)](LICENSE)
-[![Docs](https://img.shields.io/badge/Docs-edgessh--docs.pages.dev-0B84F3)](https://edgessh-docs.pages.dev/)
+**Cloudflare-native · Self-hosted · Single-admin · Open source**
 
 <br />
 
-**[快速部署](https://edgessh-docs.pages.dev/)** ·
-[功能特性](#功能特性) ·
-[安全设计](#安全设计) ·
-[本地开发](#本地开发) ·
-[文档站 →](https://edgessh-docs.pages.dev/)
+<p>
+  <a href="https://workers.cloudflare.com/"><img src="https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&amp;logoColor=white" alt="Cloudflare Workers" /></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&amp;logoColor=white" alt="TypeScript" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-546E7A" alt="Apache License 2.0" /></a>
+  <a href="https://edgessh-docs.pages.dev/"><img src="https://img.shields.io/badge/Docs-EdgeSSH-0B84F3" alt="EdgeSSH 产品与使用文档" /></a>
+</p>
 
 <br />
 
-![EdgeSSH 全球主机总览](docs/images/showcase/01-dashboard.png)
+<p>
+  <strong><a href="https://edgessh-docs.pages.dev/deploy/actions">快速部署</a></strong> ·
+  <a href="#功能特性">功能特性</a> ·
+  <a href="#安全设计">安全设计</a> ·
+  <a href="#本地开发">本地开发</a> ·
+  <a href="https://edgessh-docs.pages.dev/">文档站 →</a>
+</p>
+
+<br />
+
+![EdgeSSH WebSSH 工作台：全球主机总览与服务器管理](docs/images/showcase/01-dashboard.png)
 
 <sub>全部演示数据使用文档保留地址与虚构信息，不对应任何真实服务器。</sub>
 
@@ -34,6 +40,16 @@ Cloudflare-native · Self-hosted · Single-admin · Open source
 **你的服务器 · 你的凭据 · 你的 Cloudflare · 你的 SSH 工作台**
 
 </div>
+
+<details>
+<summary><strong>快速导航 · 功能、部署与技术说明</strong></summary>
+
+- **了解产品**：[为什么是 EdgeSSH](#为什么是-edgessh) · [功能特性](#功能特性) · [当前支持](#当前支持)
+- **开始使用**：[快速部署](#快速部署) · [认证方式](#认证) · [完整部署指南](https://edgessh-docs.pages.dev/deploy/actions)
+- **了解边界**：[安全设计](#安全设计) · [信任边界](#信任边界) · [端口转发安全](#端口转发安全)
+- **参与开发**：[本地开发](#本地开发) · [项目结构](#项目结构) · [Contributing](#contributing)
+
+</details>
 
 ---
 
@@ -99,15 +115,15 @@ EdgeSSH 把 WebSSH 的连接层、主机管理与工作台界面，一起部署�
 
 **它不只是塞进浏览器里的一个 Terminal。**
 
-### 它是部署在 Cloudflare 上的个人 SSH 工作台。
+<p><strong>它是部署在 Cloudflare 上的个人 SSH 工作台。</strong></p>
 
 </div>
 
 ---
 
-# 功能特性
+## 功能特性
 
-## 一个地方，管好你所有的服务器
+### 一个地方，管好你所有的服务器
 
 EdgeSSH 把散落各处的服务器连接信息，收进统一的主机库。
 
@@ -124,7 +140,7 @@ EdgeSSH 把散落各处的服务器连接信息，收进统一的主机库。
 
 ---
 
-## 🖥️ Terminal
+### 🖥️ SSH 在线终端 · Terminal
 
 **打开浏览器，就是进了服务器。**
 
@@ -150,7 +166,7 @@ EdgeSSH 把散落各处的服务器连接信息，收进统一的主机库。
 
 ---
 
-## 📁 File Manager
+### 📁 SFTP 文件管理 · File Manager
 
 **不必为了改一个文件,再多开一个工具。**
 
@@ -171,7 +187,7 @@ Terminal 与 File Manager 共用同一个 SSH 会话，切换之间不必重新�
 
 ---
 
-## 📊 Server Monitor
+### 📊 服务器进程监控 · Server Monitor
 
 ![EdgeSSH 实时进程监控](docs/images/showcase/04-process-monitor.png)
 
@@ -183,7 +199,7 @@ Terminal 与 File Manager 共用同一个 SSH 会话，切换之间不必重新�
 
 ---
 
-## 🔌 Port Forwarding
+### 🔌 HTTP 端口转发 · Port Forwarding
 
 服务器上有些服务只监听：
 
@@ -205,11 +221,11 @@ EdgeSSH 能借助已有的 SSH 会话,访问服务器本地的 HTTP 服务,并�
 
 > Port Forwarding 不是一个通用反向代理。WebSocket、HTTPS 上游以及部分复杂 Web 应用,目前还有一些限制。
 
-[查看端口转发与安全说明 →](https://edgessh-docs.pages.dev/)
+[查看端口转发与安全说明 →](#端口转发安全)
 
 ---
 
-## 📝 Code Snippets
+### 📝 命令片段库 · Code Snippets
 
 ![EdgeSSH 加密同步命令库](docs/images/showcase/06-command-library.png)
 
@@ -230,7 +246,7 @@ journalctl -xe
 
 ---
 
-## 🌍 服务器,也可以从地球上看
+### 🌍 服务器,也可以从地球上看
 
 EdgeSSH 会根据服务器的公网 IP,估算出大致地理位置,并画在 Dashboard 的地球上。
 
@@ -242,7 +258,7 @@ EdgeSSH 会根据服务器的公网 IP,估算出大致地理位置,并画在 Das
 
 ---
 
-# 一套工作台,多种服务器管理方式
+## 一套工作台,多种服务器管理方式
 
 ```text
                          EdgeSSH
@@ -268,7 +284,7 @@ EdgeSSH 会根据服务器的公网 IP,估算出大致地理位置,并画在 Das
 
 ---
 
-# Cloudflare-native
+## Cloudflare-native
 
 EdgeSSH 不需要你另外部署一套 WebSSH Backend。
 
@@ -318,7 +334,7 @@ SSH 握手、认证、密钥交换以及 Channel 通信,都在 Worker 一侧完�
 
 ---
 
-# 认证
+## 认证
 
 EdgeSSH 是一个 **Single-admin Workspace**。
 
@@ -360,7 +376,7 @@ EdgeSSH 是一个 **Single-admin Workspace**。
 
 ---
 
-# 安全设计
+## 安全设计
 
 服务器管理工具天生要经手高权限凭据,所以 EdgeSSH 一直在尽量收窄默认的攻击面。
 
@@ -396,7 +412,7 @@ EdgeSSH 不开放注册,也没有多租户的数据隔离逻辑。
 
 ---
 
-## 信任边界
+### 信任边界
 
 EdgeSSH **不是一个端到端加密的 SSH Gateway**。
 
@@ -410,7 +426,7 @@ Worker 本身就是真正的 SSH Client,建立连接时必然要处理 SSH 凭�
 
 ---
 
-# 快速部署
+## 快速部署
 
 最推荐的方式是:
 
@@ -428,6 +444,10 @@ GH_CLIENT_ID=<Client ID>      # Variable
 GH_CLIENT_SECRET=<Secret>     # Secret
 GH_ADMIN=<GitHub 用户名>      # Variable
 ```
+
+首次部署请按 [GitHub OAuth 五步完整教程](DEPLOYMENT.md#github-模式准备)操作：创建的是 **OAuth App**，Client ID 放 Variable，Client Secret 放 Secret，回调必须是正式入口加 `/auth/callback`。无需 Zero Trust、Access 权限或额外 GitHub PAT。
+
+**旧版点击登录报“服务暂时不可用”**：请同步含 2026-10-07 Base64 解码修复的代码，再对最新 `main` 运行 Deploy。保留原 Worker、D1 和 `ENCRYPTION_KEY`；不是靠扩大 Token 权限或换密钥解决。新版 Deploy 会自动检查 GitHub 登录入口与工作区状态。
 
 或者 Cloudflare Access:
 
@@ -463,7 +483,7 @@ Random Encryption Key
 
 <div align="center">
 
-### [查看完整部署指南 →](https://edgessh-docs.pages.dev/)
+### [查看完整部署指南 →](https://edgessh-docs.pages.dev/deploy/actions)
 
 认证配置、API Token 权限、自定义域名、Preview Worker、升级与迁移,都在文档站里有详细说明。
 
@@ -471,7 +491,7 @@ Random Encryption Key
 
 ---
 
-# 当前支持
+## 当前支持
 
 | 能力 | 支持情况 |
 | --- | --- |
@@ -499,7 +519,7 @@ SFTP 单文件上传和下载的上限是 **64 MiB**。
 
 ---
 
-# 端口转发安全
+## 端口转发安全
 
 EdgeSSH 的 Port Forward 提供两种模式。
 
@@ -529,7 +549,7 @@ Preview Worker 和 EdgeSSH 主界面运行在不同的 Origin 上,能减少被�
 
 ---
 
-# 本地开发
+## 本地开发
 
 Requirements:
 
@@ -573,7 +593,7 @@ npm run dev:web
 
 ---
 
-# 项目结构
+## 项目结构
 
 ```text
 EdgeSSH/
@@ -592,7 +612,7 @@ EdgeSSH/
 
 ---
 
-# 上游项目
+## 上游项目
 
 EdgeSSH 基于:
 
@@ -608,13 +628,13 @@ EdgeSSH 基于:
 
 ---
 
-# 特别致谢
+## 特别致谢
 
 特别感谢 [Linux.do 社区](https://linux.do/) 对 EdgeSSH 推广的支持，让 EdgeSSH 有机会在社区内发帖分享与交流。
 
 ---
 
-# Contributing
+## Contributing
 
 欢迎提交:
 
@@ -634,7 +654,7 @@ npm run check
 
 ---
 
-# Acknowledgements
+## Acknowledgements
 
 - [cmliu/CF-Workers-WebSSH](https://github.com/cmliu/CF-Workers-WebSSH) — EdgeSSH 的直接上游
 - [huashengdun/webssh](https://github.com/huashengdun/webssh) — WebSSH 与前端 API 参考
@@ -643,7 +663,7 @@ npm run check
 
 ---
 
-# License
+## License
 
 EdgeSSH is licensed under the [Apache License 2.0](LICENSE).
 
@@ -653,14 +673,14 @@ EdgeSSH is licensed under the [Apache License 2.0](LICENSE).
 
 <div align="center">
 
-# EdgeSSH
+<p><strong>EdgeSSH · 你的个人 WebSSH 工作台</strong></p>
 
-### SSH infrastructure doesn't need another server to manage it.
+<p>SSH infrastructure doesn't need another server to manage it.</p>
 
 **Your servers · Your credentials · Your Cloudflare · Your workspace**
 
 <br />
 
-**[Deploy EdgeSSH →](https://edgessh-docs.pages.dev/)** · [📚 完整文档](https://edgessh-docs.pages.dev/)
+**[Deploy EdgeSSH →](https://edgessh-docs.pages.dev/deploy/actions)** · [📚 完整文档](https://edgessh-docs.pages.dev/)
 
 </div>

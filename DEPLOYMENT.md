@@ -36,15 +36,88 @@ Access 应用的策略是唯一授权名单。可以在控制台添加多个明�
 
 ## GitHub 模式准备
 
-1. 打开 GitHub **设置（Settings）> 开发者设置（Developer settings）> OAuth 应用（OAuth Apps）> 新建 OAuth 应用（New OAuth App）**。
-2. **应用名称（Application name）**自定；**主页 URL（Homepage URL）**填 EdgeSSH 地址，**授权回调 URL（Authorization callback URL）**填 `https://你的入口/auth/callback`。
-3. 保存 Client ID，生成一个 Client Secret，按上表分别保存到 Actions Variable 和 Secret。
-4. 设置 `AUTH_PROVIDER=github`、`CUSTOM_DOMAIN=你的主机名`、首次使用的 `GH_ADMIN=你的GitHub用户名`，保存 Cloudflare API Token，然后运行 **Actions > Deploy**。使用 `workers.dev` 时才省略 `CUSTOM_DOMAIN`；邮箱输入框留空。
-5. 若首次部署前不知道入口，可先为 OAuth App 使用占位 URL；部署后将 Action 摘要中的正式入口与回调地址复制回 OAuth App 设置，再登录。
+### 第 1 步：Fork 并确定唯一入口
+
+1. Fork 本仓库，打开**自己的 Fork** 的 **Actions** 页面，按页面提示启用工作流。首次部署使用最新 `main`，不要检出独立文档分支。
+2. 二选一确定入口，不要把两种方案混填：
+
+| 方案 | Actions Variable `CUSTOM_DOMAIN` | OAuth App 的主页与回调 |
+| --- | --- | --- |
+| 自定义域名 | 如 `ssh.example.com`，**只填主机名** | `https://ssh.example.com` 和 `https://ssh.example.com/auth/callback` |
+| 免费 workers.dev | **不创建或留空**，不能填 workers.dev 地址 | 部署摘要里的正式入口，以及该入口加 `/auth/callback` |
+
+自定义域名必须已由部署所用 Cloudflare 账户托管，建议使用尚未绑定其他应用的子域名；不需要手动新建 Worker、D1 或为本项目抄写 DNS 路由。若旧入口已经启用 Access，先按下文“切换登录方式”解除旧网关，不要叠加两层认证。
+
+**本步检查**：你知道将来打开哪个入口；`CUSTOM_DOMAIN` 中没有 `https://`、斜杠、占位符或文档站域名。配置自定义域名后，备用 workers.dev 入口会关闭。
+
+### 第 2 步：创建 GitHub OAuth App
+
+在 GitHub **个人头像 > Settings > Developer settings > OAuth Apps > New OAuth App** 创建应用。注意是 **OAuth Apps**，不是 GitHub Apps，也不是 Personal access tokens。
+
+| 表单字段 | 填写示例 |
+| --- | --- |
+| Application name | `My EdgeSSH`（名字自定） |
+| Homepage URL | `https://ssh.example.com` |
+| Authorization callback URL | `https://ssh.example.com/auth/callback` |
+
+使用 workers.dev 且首次不知道地址时，可以先用 `https://example.com` 和 `https://example.com/auth/callback` 占位；**第 5 步必须替换为你自己的真实入口后才能登录**。
+
+保存应用，复制 **Client ID**；点击 **Generate a new client secret**，安全保存刚生成的 **Client Secret**。二者必须来自同一个 OAuth App。不要把 Client ID、Client Secret、Cloudflare API Token 相互混用。
 
 GitHub OAuth App 必须由用户在 GitHub 创建；普通 GitHub Token 没有官方“创建 OAuth App”的 REST 接口，工作流不会假装自动完成它。
 
+### 第 3 步：在 Fork 的 Actions 保存配置
+
+进入**仓库**（不是个人 OAuth App 页面）的 **Settings > Secrets and variables > Actions**。在两个页签分别点击 **New repository variable** / **New repository secret**；不要建到未被工作流引用的 Environment 中。
+
+| 页签 | Name（原样复制） | Value / Secret |
+| --- | --- | --- |
+| Variables | `AUTH_PROVIDER` | `github`（小写） |
+| Variables | `GH_CLIENT_ID` | 上一步的 Client ID |
+| Variables | `GH_ADMIN` | 唯一允许登录的个人 GitHub 用户名 |
+| Variables | `CUSTOM_DOMAIN` | 仅自定义域名方案填写，如 `ssh.example.com` |
+| Secrets | `GH_CLIENT_SECRET` | 同一 OAuth App 的 Client Secret |
+| Secrets | `CLOUDFLARE_API_TOKEN` | 按下一节最小权限创建的 Cloudflare API Token |
+
+例如管理员个人主页是 `https://github.com/example-user`，`GH_ADMIN` 就填 `example-user`，不是完整 URL、邮箱、组织名或显示昵称。Value 不加引号、尖括号或注释。通常不要填 `GH_ADMIN_ID`、`ADMIN_EMAIL`、`ACCESS_TEAM_DOMAIN`、`ACCESS_AUD` 或 `ENCRYPTION_KEY`，也不需要额外的 GitHub PAT。
+
+如需指定账户，在 **Variables** 保存 `CLOUDFLARE_ACCOUNT_ID`（32 位 Account ID，不是 Zone ID）。这种情况下 Token 可省略 Account Settings Read；不指定则需该读取权限且 Token 只应覆盖一个账户。
+
+**本步检查**：两个 Secret 都在 **Secrets** 页签；`AUTH_PROVIDER`、`GH_CLIENT_ID`、`GH_ADMIN` 在 **Variables** 页签。工作流不会从 Secret 读取后三者。旧版 `CUSTOM_DOMAIN` Secret 优先于同名 Variable；若更换域名，务必同步处理旧值，避免仍部署到旧入口。不要手动在 Cloudflare 创建同名运行时覆盖配置。
+
+### 第 4 步：运行 Deploy，检查整次任务而非单个步骤
+
+打开 **Actions > Deploy > Run workflow**，选择 **main**，管理员邮箱框留空，点击运行。等待整次任务变绿，打开运行摘要。
+
+首次部署会复用或创建 Worker 和 D1、迁移数据库、固定管理员数字 ID，并安全生成/保存加密密钥；重跑保留原密钥与资料。GitHub 模式部署结束前，还会实际访问正式入口：
+
+- `/auth/login` 必须返回指向 GitHub 的 **302**，且能够签发 OAuth 临时 Cookie；
+- 未携带登录 Cookie 的 `/api/auth/me` 必须返回 **401**，证明 D1 工作区与认证配置可读取且未开放匿名访问；
+- 验收失败会让 Deploy 失败，而不是只凭“上传 Worker 成功”宣告可用。
+
+**本步检查**：整次 Deploy 成功，日志有“GitHub 登录入口签名与 D1 工作区验收通过”，摘要显示 `github`、你的正式入口和回调地址。`/api/health` 返回正常或首页能打开，不能替代登录验收。此检查不向 GitHub提交授权，不验证 Client Secret 是否被撤销，仍须完成下一步。
+
+### 第 5 步：回填回调地址并完成真实登录
+
+1. 回到 **个人 Settings > Developer settings > OAuth Apps > 你的应用**。
+2. 把摘要中的入口填入 **Homepage URL**；把完整回调地址填入 **Authorization callback URL**，保存。协议必须为 `https://`，域名必须相同，路径精确为 `/auth/callback`，不要多加末尾斜杠。
+3. 打开摘要中的正式入口，点击 **登录**，使用 `GH_ADMIN` 指定的账号授权。若浏览器登录了别人的 GitHub，先切换账号。
+4. 成功后应回到主机总览；同一浏览器访问 `/api/auth/me` 应返回 **200** 和 `provider: "github"`。随后用自己授权的服务器验证 SSH；没有 SSH 主机不会影响 GitHub 登录验证。
+
+不要收藏或重新使用带 `code`、`state` 的 callback 地址；每次失败都从首页重新点登录。上面的占位 URL 只解决“先取得正式地址”的顺序问题，不是有效登录配置。
+
 登录时仅读取 GitHub 公开身份，不申请仓库、组织或私人邮箱权限。首次部署将用户名解析为数字用户 ID 并固定在 D1；后续普通部署直接复用该 ID，不会因用户名改名或易主而改变管理员。仅在明确更换管理员时设置 `GH_ADMIN_ID` 为新的数字 ID 并部署，部署会同时撤销旧会话；完成后可保留该值作为显式配置。
+
+### 已部署用户：修复“服务暂时不可用，请稍后重试”
+
+2026-10-07 修复了一个可复现的 GitHub 登录代码缺陷：自动生成的 `ENCRYPTION_KEY` 是标准 Base64，但旧代码按 Base64URL 解码；密钥包含 `+` 或 `/` 时，点击登录可能直接返回 **500**，甚至还没跳到 GitHub。原测试密钥不含这些字符，所以没拦住它。**该缺陷不代表你填错配置，也不是缺少 Access 权限。**
+
+1. 在 Fork 执行 **Sync fork > Update branch**，确认已包含本次 Base64 解码修复。只重新运行旧提交对应的任务，不会获得新代码。
+2. 保留现有 Worker、D1、OAuth App、`GH_CLIENT_SECRET` 和 `ENCRYPTION_KEY`。不要删除资源、清库、反复生成新密钥来碰运气。
+3. 对更新后的 **main** 运行一次 **Deploy**，确认整次任务成功并通过上述入口验收。
+4. 从摘要中的入口重新登录，不使用旧 callback 链接。
+
+修复使用原密钥字节，不迁移或重加密已有主机资料。若更新后仍失败，按下文的“失败阶段”排查；同一句通用 500 也可能来自其他异常，不能只凭文案认定是这一原因。
 
 ## API Token 权限
 
@@ -157,7 +230,7 @@ Cloudflare 模式仍可用 `ACCESS_IDP_IDS` 为新 Access 应用选择现成 IdP
 
 ## 排障
 
-- **403**：检查 Token 权限及账户/Zone 范围，不是重新生成加密密钥。
+- **Deploy 中 Cloudflare API 返回 403**：检查 API Token 的权限、账户范围与有效期；若自行改成普通路由再检查 Zone 范围。浏览器 OAuth 回调返回 403“不是管理员”是另一回事，不需要扩大 Cloudflare Token 权限。
 - **找不到唯一账户**：限定 Token 到一个账户，或配置 `CLOUDFLARE_ACCOUNT_ID`。
 - **组织读取失败**：先完成 Zero Trust 开通和团队域设置。
 - **首次部署缺少邮箱**：在 Run workflow 输入，或设置 `ADMIN_EMAIL`。
@@ -165,8 +238,14 @@ Cloudflare 模式仍可用 `ACCESS_IDP_IDS` 为新 Access 应用选择现成 IdP
 - **更换域名后无法登录**：带邮箱重新运行以配置新 hostname 的应用；不要仅改路由而沿用旧 AUD。
 - **OTP 未收到**：确认输入邮箱完全匹配 Allow 策略，检查垃圾邮件。GitHub 等其他 IdP 的账户邮箱同样必须匹配授权。
 - **GitHub 回调失败**：检查 OAuth App 回调地址是否精确为 `https://实际入口/auth/callback`，Client ID/Secret 是否来自同一 OAuth App；重新从首页登录，不复用旧回调链接。
+- **点击登录后、跳到 GitHub 前返回 500**：先同步含 Base64 解码修复的 `main` 并重新 Deploy，保留原 `ENCRYPTION_KEY`；不要授予额外 Access 权限。
+- **提示“请从配置的正式入口登录”**：打开 Deploy 摘要的正式入口；核对 `CUSTOM_DOMAIN` 的 Secret/Variable 是否冲突，不要手工覆盖 Worker 的 `APP_ORIGIN`。
+- **GitHub 授权返回后仍报 500/502**：检查失败请求是否为 `/auth/callback`、GitHub 连通性、OAuth App 的 Client Secret 与 D1 状态；从首页重新发起流程。不要把 callback URL、Cookie 或 Secret 发给他人。
+- **Deploy 的入口验收无法连接**：检查自定义域名是否位于同一 Cloudflare 账户、DNS/证书是否就绪，待就绪后重跑；不要跳过验收或因超时重建数据库。
 - **GitHub 拒绝管理员**：`GH_ADMIN` 应填个人用户名，不是邮箱或组织；用该账号重新授权。
 - 手工配置、截图与 Access JWT 排查见 [Zero Trust 指南](docs/ZERO_TRUST.md)。
+
+需要反馈时只提供：出错的步骤、正式入口（如可公开）、失败请求的**路径和 HTTP 状态码**、Deploy 提交 SHA/运行链接、脱敏错误截图。不要提供 API Token、Client Secret、ENCRYPTION_KEY、完整回调查询参数、请求 Cookie 或未经脱敏的整份网络日志。第三方服务故障、账户限制或 DNS 尚未生效时，应先解决对应问题；文档与自动检查不能替代真实授权验收。
 
 ## 验收清单
 
