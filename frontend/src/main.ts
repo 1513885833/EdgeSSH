@@ -2194,7 +2194,7 @@ async function initialize(): Promise<void> {
       if (connectionState === 'idle' || connectionState === 'error') setPanelOpen(true);
     },
   }, fileManager);
-  keychain = new Keychain();
+  keychain = new Keychain(() => dashboard?.openWorkspace());
   keychain.addEventListener('change', () => fillKeychainSelect(ui.keychainId, keychain.keys));
   ui.form.querySelector('input[name="authMethod"][value="keychain"]')!.addEventListener('change', () => void keychain.load());
   element('manage-keychain').addEventListener('click', () => dashboard?.showKeychain());

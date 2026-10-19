@@ -175,6 +175,27 @@ test('自动重连继续使用密钥引用', async ({ page }) => {
   expect(f.connections[1].privateKey).toBeUndefined(); expect(f.connections[1].password).toBeUndefined();
 });
 
+test('管理密钥后返回终端保留连接草稿且不打断活动连接', async ({ page }) => {
+  const f = await fixture(page);
+  await page.locator('#quick-connect').click();
+  await page.locator('#host').fill('192.0.2.20');
+  await page.getByRole('radio', { name: '密钥链', exact: true }).check();
+  await page.locator('#keychain-id').selectOption(keyId);
+  await page.locator('#manage-keychain').click();
+  await expect(page.locator('.keychain-page')).toBeVisible();
+  await page.getByRole('button', { name: '返回终端', exact: true }).click();
+  await expect(page.locator('#host')).toHaveValue('192.0.2.20');
+  await expect(page.getByRole('radio', { name: '密钥链', exact: true })).toBeChecked();
+  await expect(page.locator('#keychain-id')).toHaveValue(keyId);
+  await page.locator('#connect-button').click();
+  await expect(page.locator('#connect-button')).toHaveAttribute('data-action', 'disconnect');
+  await page.locator('#panel-toggle').click();
+  await page.locator('#manage-keychain').click();
+  await page.getByRole('button', { name: '返回终端', exact: true }).click();
+  await expect(page.locator('#connect-button')).toHaveAttribute('data-action', 'disconnect');
+  expect(f.connections).toHaveLength(1);
+});
+
 for (const view of ['terminal', 'files']) test(`已有主机在 ${view} 连接复用密钥引用`, async ({ page }) => {
   const f = await fixture(page);
   if (view === 'files') {

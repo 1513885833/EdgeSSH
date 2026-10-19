@@ -1,4 +1,4 @@
-import { createElement, KeyRound, Plus, RefreshCw, Copy, Download, Pencil, Trash2, X } from 'lucide';
+import { createElement, KeyRound, Plus, RefreshCw, Copy, Download, Pencil, Trash2, X, Terminal } from 'lucide';
 import { listKeychain, saveKeychainKey, removeKeychainKey, exportKeychainKey, type KeychainKey } from './cloud-api';
 import './keychain.css';
 
@@ -20,11 +20,12 @@ export class Keychain extends EventTarget {
   private readonly dialog: HTMLDialogElement;
   private readonly form: HTMLFormElement;
 
-  constructor() {
+  constructor(openTerminal: () => void) {
     super();
     this.root.className = 'keychain-page'; this.root.hidden = true;
     this.root.innerHTML = `<header class="keychain-heading"><h1 tabindex="-1">密钥链</h1>
-      <button type="button" class="home-button primary" data-new>新建密钥</button></header>
+      <div class="keychain-heading-actions"><button type="button" class="home-button" data-terminal aria-label="返回终端" title="返回终端"></button>
+      <button type="button" class="home-button primary" data-new>新建密钥</button></div></header>
       <div class="keychain-toolbar"><input type="search" aria-label="搜索密钥" placeholder="搜索名称或指纹">
       <button type="button" class="home-button" data-refresh aria-label="刷新密钥" title="刷新密钥"></button></div>
       <p class="keychain-status" role="status" hidden></p><div class="keychain-list"></div>
@@ -44,6 +45,8 @@ export class Keychain extends EventTarget {
     this.dialog = this.root.querySelector('dialog')!;
     this.form = this.dialog.querySelector('form')!;
     this.root.querySelector('[data-new]')!.prepend(createElement(Plus));
+    this.root.querySelector('[data-terminal]')!.append(createElement(Terminal));
+    this.root.querySelector('[data-terminal]')!.addEventListener('click', openTerminal);
     this.root.querySelector('[data-refresh]')!.append(createElement(RefreshCw));
     this.root.querySelector('[aria-label="关闭"]')!.append(createElement(X));
     this.root.querySelector('[data-new]')!.addEventListener('click', () => this.open());

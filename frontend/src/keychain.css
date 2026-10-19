@@ -5,6 +5,8 @@ body[data-view='keychain'] .home-account { margin-left: auto; }
 .keychain-heading, .keychain-toolbar { display: flex; align-items: center; gap: 12px; justify-content: space-between; margin-bottom: 24px; }
 .keychain-heading h1 { margin: 0; font-size: 26px; letter-spacing: 0; }
 .keychain-heading .home-button { gap: 8px; }
+.keychain-heading-actions { display: flex; gap: 8px; align-items: center; }
+#dashboard .keychain-heading [data-terminal] { width: 44px; height: 44px; padding: 10px; }
 .keychain-toolbar input { max-width: 440px; flex: 1; min-width: 0; }
 #dashboard .keychain-toolbar input, #dashboard .keychain-copy textarea { padding: 10px 12px; border: 1px solid var(--home-line); border-radius: 6px; color: var(--home-ink); background: var(--home-surface); box-shadow: none; }
 #dashboard .keychain-toolbar input { min-height: 44px; font: inherit; }
