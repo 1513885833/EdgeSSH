@@ -76,3 +76,4 @@ export const saveKeychainKey = async (input: KeychainInput, id?: string): Promis
   (await api<{ key: KeychainKey }>(id ? `/api/keychain/${id}` : '/api/keychain', id ? 'PUT' : 'POST', input)).key;
 export const removeKeychainKey = (id: string): Promise<{ ok: boolean }> => api(`/api/keychain/${id}`, 'DELETE');
 export const exportKeychainKey = (id: string): Promise<{ privateKey: string }> => api(`/api/keychain/${id}/private-key`, 'POST');
+export const generateKeychainKey = (): Promise<{ privateKey: string; publicKey: string }> => api('/api/keychain/generate', 'POST', {});

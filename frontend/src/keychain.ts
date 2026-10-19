@@ -1,5 +1,5 @@
 import { createElement, KeyRound, Plus, RefreshCw, Copy, Download, Pencil, Trash2, X, Terminal } from 'lucide';
-import { listKeychain, saveKeychainKey, removeKeychainKey, exportKeychainKey, type KeychainKey } from './cloud-api';
+import { listKeychain, saveKeychainKey, removeKeychainKey, exportKeychainKey, generateKeychainKey, type KeychainKey } from './cloud-api';
 import './keychain.css';
 
 export function fillKeychainSelect(select: HTMLSelectElement, keys: KeychainKey[], selected = select.value): void {
@@ -33,12 +33,12 @@ export class Keychain extends EventTarget {
         <div class="dialog-heading"><h2 id="keychain-dialog-title">新建密钥</h2><button type="button" class="home-button" data-close aria-label="关闭" title="关闭"></button></div>
         <div class="host-form-grid">
           <label class="wide">名称<input name="name" maxlength="80" required></label>
-          <label class="wide" data-mode-field>来源<select name="mode"><option value="generate">生成 Ed25519 密钥</option><option value="import">导入已有密钥</option></select></label>
-          <label class="wide" data-import hidden>私钥<textarea name="privateKey" rows="6" maxlength="65536" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
-          <label class="wide" data-import hidden>私钥文件<input name="file" type="file" accept=".pem,.key,.openssh,text/plain"></label>
-          <label class="wide" data-import hidden>公钥<textarea name="publicKey" rows="3" maxlength="16384" spellcheck="false" placeholder="ssh-ed25519 …"></textarea></label>
+          <div class="wide keychain-key-actions"><button type="button" class="home-button" data-generate title="生成 Ed25519 密钥">生成</button></div>
+          <label class="wide">私钥<textarea name="privateKey" rows="6" maxlength="65536" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
+          <label class="wide">私钥文件<input name="file" type="file" accept=".pem,.key,.openssh,text/plain"></label>
+          <label class="wide">公钥<textarea name="publicKey" rows="3" maxlength="16384" spellcheck="false" placeholder="ssh-ed25519 …"></textarea></label>
         </div>
-        <p class="credential-help" data-key-help>Ed25519 · 私钥使用 AES-256-GCM 加密保存。</p>
+        <p class="credential-help" data-key-help></p>
         <p class="host-form-error" role="alert" hidden></p>
         <div class="dialog-actions"><button type="button" class="home-button" data-close>取消</button><button class="home-button primary" type="submit">保存</button></div>
       </form></dialog>`;
@@ -48,6 +48,8 @@ export class Keychain extends EventTarget {
     this.root.querySelector('[data-terminal]')!.append(createElement(Terminal));
     this.root.querySelector('[data-terminal]')!.addEventListener('click', openTerminal);
     this.root.querySelector('[data-refresh]')!.append(createElement(RefreshCw));
+    this.root.querySelector('[data-generate]')!.prepend(createElement(KeyRound));
+    this.root.querySelector('[data-generate]')!.addEventListener('click', () => void this.generate());
     this.root.querySelector('[aria-label="关闭"]')!.append(createElement(X));
     this.root.querySelector('[data-new]')!.addEventListener('click', () => this.open());
     this.root.querySelector('[data-refresh]')!.addEventListener('click', () => void this.load());
@@ -55,14 +57,13 @@ export class Keychain extends EventTarget {
     this.root.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => { if (!this.busy) this.dialog.close(); }));
     this.dialog.addEventListener('cancel', (event) => { if (this.busy) event.preventDefault(); });
     this.dialog.addEventListener('close', () => { this.form.reset(); this.editing = undefined; this.editorGeneration++; this.returnFocus?.focus(); });
-    this.field('mode').addEventListener('change', () => this.updateMode());
     this.field('file').addEventListener('change', () => void this.readFile());
     this.form.addEventListener('submit', (event) => { event.preventDefault(); void this.save(); });
     window.addEventListener('auth-required', () => this.clear());
   }
 
-  private field(name: string): HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement {
-    return this.form.elements.namedItem(name) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+  private field(name: string): HTMLInputElement | HTMLTextAreaElement {
+    return this.form.elements.namedItem(name) as HTMLInputElement | HTMLTextAreaElement;
   }
 
   async load(): Promise<void> {
@@ -135,21 +136,36 @@ export class Keychain extends EventTarget {
     this.form.reset(); this.editing = key; this.editorGeneration++;
     (this.field('file') as HTMLInputElement).setCustomValidity('');
     this.field('name').value = key?.name ?? '';
-    this.field('mode').value = key ? 'import' : 'generate';
+    this.field('privateKey').required = !key;
     this.field('publicKey').value = key?.publicKey ?? '';
     this.dialog.querySelector('h2')!.textContent = key ? '编辑密钥' : '新建密钥';
-    this.dialog.querySelector<HTMLElement>('[data-mode-field]')!.hidden = Boolean(key);
     this.dialog.querySelector<HTMLElement>('[role="alert"]')!.hidden = true;
-    this.updateMode(); this.dialog.showModal(); this.field('name').focus();
-  }
-
-  private updateMode(): void {
-    const imported = this.field('mode').value === 'import';
-    this.field('file').disabled = !imported;
-    this.dialog.querySelectorAll<HTMLElement>('[data-import]').forEach((field) => { field.hidden = !imported; });
     this.dialog.querySelector('[data-key-help]')!.textContent = this.editing
       ? '私钥留空保留原值；更换私钥时请更新公钥或将公钥留空。'
-      : imported ? '未设口令的 OpenSSH 私钥 · 公钥留空时自动提取。' : 'Ed25519 · 私钥使用 AES-256-GCM 加密保存。';
+      : '未设口令的 OpenSSH 私钥 · 公钥留空时自动提取 · 私钥加密保存。';
+    this.dialog.showModal(); this.field('name').focus();
+  }
+
+  private async generate(): Promise<void> {
+    if (this.busy) return;
+    if ((this.field('privateKey').value.trim() || this.field('publicKey').value.trim()) && !confirm('生成新密钥并替换当前输入的公钥和私钥？')) return;
+    const button = this.form.querySelector<HTMLButtonElement>('[data-generate]')!;
+    const submit = this.form.querySelector<HTMLButtonElement>('[type="submit"]')!;
+    const generation = this.generation, editorGeneration = this.editorGeneration;
+    this.busy = true; button.disabled = true; submit.disabled = true;
+    button.lastChild!.textContent = '生成中…';
+    for (const name of ['privateKey', 'publicKey', 'file']) this.field(name).disabled = true;
+    this.dialog.querySelector<HTMLElement>('[role="alert"]')!.hidden = true;
+    try {
+      const pair = await generateKeychainKey();
+      if (generation !== this.generation || editorGeneration !== this.editorGeneration) return;
+      this.field('privateKey').value = pair.privateKey; this.field('publicKey').value = pair.publicKey;
+      this.field('file').value = ''; this.field('file').setCustomValidity('');
+    } catch (error) { if (generation === this.generation && editorGeneration === this.editorGeneration) this.formError(error); }
+    finally {
+      this.busy = false; button.disabled = false; submit.disabled = false; button.lastChild!.textContent = '生成';
+      for (const name of ['privateKey', 'publicKey', 'file']) this.field(name).disabled = false;
+    }
   }
 
   private async readFile(): Promise<void> {
@@ -177,10 +193,9 @@ export class Keychain extends EventTarget {
     const generation = this.generation;
     this.busy = true; button.disabled = true; button.textContent = '保存中…';
     try {
-      const generate = this.field('mode').value === 'generate';
-      await saveKeychainKey({ name: this.field('name').value, ...(generate ? { generate: true } : {
+      await saveKeychainKey({ name: this.field('name').value,
         privateKey: this.field('privateKey').value || undefined, publicKey: this.field('publicKey').value,
-      }) }, this.editing?.id);
+      }, this.editing?.id);
       if (generation !== this.generation) return;
       this.dialog.close(); await this.load();
     } catch (error) { if (generation === this.generation) this.formError(error); }

@@ -27,6 +27,8 @@ body[data-view='keychain'] .home-account { margin-left: auto; }
 .keychain-dialog h2 { margin: 0; font-size: 22px; }
 .keychain-dialog .credential-help { color: var(--home-muted); font-size: 12px; }
 .keychain-dialog textarea { font-family: var(--home-mono); }
+.keychain-key-actions { display: flex; justify-content: flex-end; }
+.keychain-key-actions .home-button { gap: 8px; min-width: 100px; }
 @media (max-width: 700px) {
   .keychain-page { padding: 24px 16px; }
   .keychain-row { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 12px; }

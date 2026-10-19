@@ -88,6 +88,22 @@ test('真实 workerd 支持 Ed25519 生成、OpenSSH 认证和密文往返', asy
   } finally { await mf.dispose(); }
 });
 
+test('单独生成匹配的公私钥但不保存，确认后可加密入库', async (context) => {
+  const f = fixture(); context.after(() => f.sqlite.close());
+  const response = await f.request('POST', 'generate', {});
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  const pair = await response.json();
+  assert.match(pair.privateKey, /BEGIN OPENSSH PRIVATE KEY/);
+  assert.deepEqual(await SSHAuth.publicKeyInfo(pair.privateKey), { publicKey: pair.publicKey, fingerprint: pair.fingerprint });
+  assert.deepEqual(await (await f.request()).json(), { keys: [] });
+  const saved = await (await f.request('POST', '', { name: '确认保存', privateKey: pair.privateKey, publicKey: pair.publicKey })).json();
+  assert.equal(saved.key.privateKey, undefined);
+  assert.equal((await readKeychainKey(f.env, 'owner', saved.key.id)).privateKey, pair.privateKey);
+  await assert.rejects(f.request('GET', 'generate'), /不支持/);
+  await assert.rejects(f.request('POST', 'generate', { name: '不需要名称' }), /空对象/);
+});
+
 test('密钥链生成、导出、保留私钥编辑、加密与账户隔离', async (context) => {
   const f = fixture(); context.after(() => f.sqlite.close());
   const key = await f.create();

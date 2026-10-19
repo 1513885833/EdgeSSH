@@ -20,6 +20,14 @@ function metadata(id: string, payload: KeyPayload, updatedAt: number) {
 }
 
 export async function keychainRoute(request: Request, env: Env, accountId: string, pathname: string): Promise<Response> {
+  if (pathname === '/api/keychain/generate') {
+    if (request.method !== 'POST') throw new APIError('不支持此请求方法。', 405);
+    const body = await readJSON(request, 1024);
+    if (Object.keys(body).length) throw new APIError('生成密钥的请求必须为空对象。');
+    const privateKey = await generatePrivateKey();
+    // 生成只填入编辑器，用户确认保存前不写数据库。
+    return json({ privateKey, ...await SSHAuth.publicKeyInfo(privateKey) });
+  }
   const match = /^\/api\/keychain(?:\/([a-f0-9-]{36})(?:\/(private-key))?)?$/.exec(pathname);
   if (!match) throw new APIError('接口不存在。', 404);
   const [, id, action] = match;
