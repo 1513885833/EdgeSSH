@@ -215,8 +215,10 @@ export class Keychain extends EventTarget {
       const passphrase = this.field('passphrase').value;
       await saveKeychainKey({ name: this.field('name').value,
         privateKey: privateKey || undefined, publicKey: this.field('publicKey').value,
-        // 换新私钥时留空口令表示新私钥未加密；不换私钥时留空表示沿用原口令。
-        ...(passphrase || privateKey ? { passphrase } : {}),
+        // 口令留空的语义取决于有没有旧值可沿用：更换私钥时留空表示「新私钥未加密」，必须显式发出
+        // 空口令去清掉旧口令；不换私钥时留空表示沿用原口令，干脆不带这个字段。新建本就没有旧
+        // 口令，发出空字段只是噪声。
+        ...(passphrase || (privateKey && this.editing) ? { passphrase } : {}),
       }, this.editing?.id);
       if (generation !== this.generation) return;
       this.dialog.close(); await this.load();
