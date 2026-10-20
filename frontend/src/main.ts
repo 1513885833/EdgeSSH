@@ -809,6 +809,8 @@ function clearCredentials(): void {
   resetPasswordField();
   clearPrivateKeyFields();
   ui.keychainId.value = '';
+  // 不同主机的口令必须隔离，否则切到未加密/其他口令的主机会带着上一个主机的口令发出去。
+  ui.keyPassphrase.value = '';
 }
 
 // A stale async history-password decrypt must never overwrite the form. The
@@ -945,6 +947,9 @@ async function applyProfile(profile: SavedProfile): Promise<void> {
   if (selectionUnchanged) {
     ui.password.value = credentials.password ?? '';
     ui.privateKey.value = credentials.privateKey ?? '';
+    // 口令必须一并回填：终端页只对服务端发送私钥/密钥链引用，口令单独走 keyPassphrase 字段。
+    // 漏掉这一项时加密私钥能保存也能「连接测试」通过，正式进终端却报「私钥已加密，请提供口令」。
+    ui.keyPassphrase.value = credentials.keyPassphrase ?? '';
   }
   setState(connectionState);
 }
@@ -1184,7 +1189,10 @@ function fitTerminal(send = true): void {
   resizeFrame = requestAnimationFrame(() => {
     try {
       fitAddon.fit();
-      if (send && socket?.readyState === WebSocket.OPEN) {
+      // 握手完成前不能发 resize：此时服务端还没有会话，任何非 connect 消息都会被判成重复
+      // 连接，进而把正在进行的握手一起掐断。进入终端必然会触发 ResizeObserver（布局变化），
+      // 所以这个时序很容易命中；真实尺寸在 markReady 里补发一次。
+      if (send && connectionState === 'connected' && socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
       }
     } catch {
@@ -1269,6 +1277,8 @@ function markReady(message = bilingual('交互式 Shell 已就绪', 'Interactive
     }, 120);
   }
   if (document.body.dataset.view === 'workspace') terminal.focus();
+  // 补发真实尺寸：握手期间因为布局变化产生的 resize 都被抑制了，这里对齐一次。
+  requestAnimationFrame(() => fitTerminal(true));
 }
 
 function sendHostKeyDecision(accept: boolean): void {
