@@ -185,7 +185,13 @@ export class SSHSessionDO implements DurableObject {
         await session.handleClientMessage(message);
         return;
       }
-      if (this.pendingConnections.has(ws)) throw new Error('An SSH connection is already being initialized');
+      if (this.pendingConnections.has(ws)) {
+        // 只有重复的 connect 才算冲突。终端尺寸变化这类控制消息在 SSH 会话建立之前到达
+        // 属于正常的时序竞争（例如进入终端触发的 ResizeObserver），忽略即可；按错误处理
+        // 会把正在握手的连接一起掐断。
+        if (!this.isConnectFrame(message)) return;
+        throw new Error('An SSH connection is already being initialized');
+      }
       if (typeof message !== 'string' || message.length > 160 * 1024) throw new Error('The first WebSocket message must be a connect JSON object');
       let decoded: unknown;
       try { decoded = JSON.parse(message); } catch { throw new Error('Invalid connect JSON'); }
@@ -261,6 +267,19 @@ export class SSHSessionDO implements DurableObject {
   async alarm(): Promise<void> {
     await this.state.storage.delete(TICKET_STORAGE_KEY);
     await this.state.storage.delete('account-id');
+  }
+
+  /**
+   * 判断报文是否为连接请求，用于在握手未完成时区分「重复 connect」与「提前到达的控制消息」。
+   * 无法解析的一律按非连接报文处理，交由调用方忽略。
+   */
+  private isConnectFrame(message: unknown): boolean {
+    if (typeof message !== 'string' || message.length > 160 * 1024) return false;
+    try {
+      return (JSON.parse(message) as { type?: unknown } | null)?.type === 'connect';
+    } catch {
+      return false;
+    }
   }
 
   private connectTimeout(): number {
