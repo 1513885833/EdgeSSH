@@ -198,7 +198,12 @@ export class SSHSessionDO implements DurableObject {
       if (config.keychainId) {
         const accountId = await this.state.storage.get<string>('account-id');
         // 使用票据绑定的工作区取密钥，浏览器只发送引用，不能指定其他账户。
-        try { config.privateKey = (await readKeychainKey(this.env, accountId!, config.keychainId)).privateKey; }
+        try {
+          const entry = await readKeychainKey(this.env, accountId!, config.keychainId);
+          config.privateKey = entry.privateKey;
+          // 密钥链里存的口令作为缺省值，连接消息里显式带的口令优先。
+          if (!config.keyPassphrase && entry.passphrase) config.keyPassphrase = entry.passphrase;
+        }
         catch (error) {
           if (error instanceof APIError && error.status === 404) throw new SSHAuthDefectError('密钥不存在，请重新选择密钥链。');
           throw new Error('密钥链读取失败，请稍后重试。');

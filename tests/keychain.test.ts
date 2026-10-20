@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { build } from 'esbuild';
 import { Miniflare } from 'miniflare';
 import { decryptHost, encryptHost } from '../src/accounts/crypto.ts';
+import { MISSING_SSH_KEYGEN, encryptedKeyFixture, hasSshKeygen } from './fixtures/encrypted-keys.ts';
 
 const bundle = await build({
   stdin: { contents: `export * from './src/accounts/keychain.ts'; export * from './src/accounts/hosts.ts';
@@ -199,4 +200,40 @@ test('DO 只按票据工作区解密密钥并交给既有 SSH 会话', async (co
   }
   assert.equal(configs.length, 1);
   assert.equal(configs[0].privateKey, (await readKeychainKey(f.env, 'owner', key.id)).privateKey);
+});
+
+/** 导出走的是 action 路径，fixture 里的 request 助手不带 action，这里自己拼。 */
+async function exportKey(env: any, id: string) {
+  const path = `/api/keychain/${id}/private-key`;
+  const response = await keychainRoute(new Request(`https://example.com${path}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+  }), env, 'owner', path);
+  return await response.json() as any;
+}
+
+test('口令随私钥加密保存：列表不回传，导出时连同口令一并给出', async (context) => {
+  const f = fixture(); context.after(() => f.sqlite.close());
+  if (!hasSshKeygen()) return context.skip(MISSING_SSH_KEYGEN);
+  const { pem, passphrase } = encryptedKeyFixture('ed25519Ctr');
+  const created = await f.request('POST', '', { name: '加密密钥', privateKey: pem, passphrase });
+  const { id } = (await created.json()).key;
+
+  // 列表与保存响应都不能把口令或私钥回给浏览器。
+  const list = await (await f.request('GET')).json();
+  assert.equal('passphrase' in (list as any).keys[0], false);
+  assert.equal(JSON.stringify(list).includes(passphrase), false);
+  assert.equal(JSON.stringify(list).includes(pem), false);
+
+  // 导出的加密私钥若没有口令，用户拿到的文件根本无法使用。
+  const exported = await exportKey(f.env, id);
+  assert.equal(exported.privateKey, pem);
+  assert.equal(exported.passphrase, passphrase);
+});
+
+test('未加密私钥导出时不带口令字段', async (context) => {
+  const f = fixture(); context.after(() => f.sqlite.close());
+  const key = await f.create();
+  const exported = await exportKey(f.env, key.id);
+  assert.match(exported.privateKey, /^-----BEGIN OPENSSH PRIVATE KEY-----/);
+  assert.equal('passphrase' in exported, false);
 });

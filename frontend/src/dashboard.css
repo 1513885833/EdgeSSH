@@ -146,6 +146,7 @@ body[data-view='dashboard'] { overflow-y: auto; background: var(--home-bg); }
 .host-advanced summary { padding: 6px 0 12px; cursor: pointer; }
 .host-form-disclosure { margin-top: 18px; font-size: 11px; color: var(--home-muted); }
 .host-form-error { color: var(--home-danger); font-size: 12px; }
+.host-form-error.is-success { color: var(--home-success, #15803d); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
 @media (min-width: 1600px) { .home-content { padding-top: 44px; } .home-main-grid { min-height: 570px; } }
 @media (max-width: 1250px) {

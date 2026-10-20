@@ -55,6 +55,7 @@ interface ConnectionConfig {
   authMethod: AuthMethod;
   privateKey?: string;
   keychainId?: string;
+  keyPassphrase?: string;
   cols: number;
   rows: number;
   term: string;
@@ -268,6 +269,8 @@ const ui = {
   keychainId: element<HTMLSelectElement>('keychain-id'),
   privateKey: element<HTMLTextAreaElement>('private-key'),
   keyFile: element<HTMLInputElement>('key-file'),
+  keyPassphraseField: element<HTMLElement>('key-passphrase-field'),
+  keyPassphrase: element<HTMLInputElement>('key-passphrase'),
   keyFileName: element<HTMLElement>('key-file-name'),
   initialCommand: element<HTMLInputElement>('initial-command'),
   termType: element<HTMLSelectElement>('term-type'),
@@ -423,7 +426,7 @@ let terminalTools: TerminalToolsController | undefined;
 let sshReconnectManager: WebSocketReconnectManager | null = null;
 let reconnectParams: {
   host: string; port: number; username: string; authMethod: string;
-  password?: string; privateKey?: string; keychainId?: string; pinnedKey?: string;
+  password?: string; privateKey?: string; keychainId?: string; keyPassphrase?: string; pinnedKey?: string;
   term: string; encoding: string;
 } | null = null;
 
@@ -776,6 +779,8 @@ function setAuthMethod(method: AuthMethod | 'keychain'): void {
   ui.passwordField.hidden = method !== 'password';
   ui.keyField.hidden = method !== 'publickey';
   ui.keychainField.hidden = method !== 'keychain';
+  // 「上传私钥」与「密钥链」两种公钥方式都要能填口令
+  ui.keyPassphraseField.hidden = method !== 'publickey' && method !== 'keychain';
   ui.keychainId.required = method === 'keychain';
 }
 
@@ -1596,6 +1601,8 @@ function createSshReconnectFactory(): (attempt: number) => Promise<WebSocket> {
       if (params.authMethod === 'password') config.password = params.password;
       else if (params.keychainId) config.keychainId = params.keychainId;
       else config.privateKey = params.privateKey;
+      // 重连时口令必须一并回传，否则加密私钥会在第二次握手上解不开。
+      if (params.authMethod === 'publickey' && params.keyPassphrase) config.keyPassphrase = params.keyPassphrase;
       if (params.pinnedKey) config.expectedFingerprint = params.pinnedKey;
 
       ws.send(JSON.stringify(config));
@@ -1708,6 +1715,7 @@ async function connect(): Promise<void> {
     const privateKey = ui.privateKey.value.trim();
     const keychainId = usesKeychain() ? ui.keychainId.value : undefined;
     const method = authMethod();
+    const keyPassphrase = method === 'password' ? '' : ui.keyPassphrase.value;
     const term = ui.termType.value;
     const historyProfile = readProfileFromForm(password);
     // Resolve encryption during the SSH handshake so ready can usually save synchronously.
@@ -1733,6 +1741,7 @@ async function connect(): Promise<void> {
     if (method === 'password') reconnectParams.password = password;
     else if (keychainId) reconnectParams.keychainId = keychainId;
     else reconnectParams.privateKey = privateKey;
+    if (keychainId || privateKey) reconnectParams.keyPassphrase = keyPassphrase;
     if (pinnedKey) reconnectParams.pinnedKey = pinnedKey;
 
     // Set up (or replace) the SSH reconnect manager.
@@ -1764,6 +1773,7 @@ async function connect(): Promise<void> {
       if (method === 'password') config.password = password;
       else if (keychainId) config.keychainId = keychainId;
       else config.privateKey = privateKey;
+      if (method === 'publickey' && keyPassphrase) config.keyPassphrase = keyPassphrase;
       if (pinnedKey) config.expectedFingerprint = pinnedKey;
       activeSocket.send(JSON.stringify(config));
       updateConnectionStatus(localized('正在打开 TCP 连接...', 'Opening TCP connection...'));
