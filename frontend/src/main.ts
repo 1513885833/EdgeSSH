@@ -1158,12 +1158,62 @@ function toast(message: string, kind: 'info' | 'error' = 'info'): void {
   window.setTimeout(() => item.remove(), 4_500);
 }
 
+/**
+ * Whether the live session belongs to the target currently shown in the form.
+ *
+ * Selecting another entry from the cloud host list only refills the form — the
+ * previous session stays online. Anything keyed off the global link state alone
+ * (notably the connect button) would then offer "disconnect" for the *other*
+ * host's session, so link state and form target must be checked together.
+ */
+function sessionOwnsFormTarget(): boolean {
+  if (connectionState !== 'connecting' && connectionState !== 'connected' && connectionState !== 'disconnecting') return false;
+  return currentTargetKey !== '' && currentTargetKey === targetKey();
+}
+
+/** Wait until a requested disconnect has settled back to idle. */
+function waitForIdle(timeoutMs = 2_000): Promise<void> {
+  return new Promise((resolve) => {
+    if (connectionState === 'idle' || connectionState === 'error') {
+      resolve();
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      if (connectionState === 'idle' || connectionState === 'error' || Date.now() - startedAt >= timeoutMs) {
+        window.clearInterval(timer);
+        resolve();
+      }
+    }, 40);
+  });
+}
+
+/** Paint the connect button for the host currently held by the form. */
+function renderConnectControl(): void {
+  const state: ConnectionState = sessionOwnsFormTarget() ? connectionState : 'idle';
+  const control = resolveConnectionControl(state, historyPasswordLoading);
+  const controlLabel = control.action === 'cancel'
+    ? bilingual('取消连接', 'Cancel connection')
+    : control.action === 'disconnect'
+      ? bilingual('断开', 'Disconnect')
+      : control.action === 'disconnecting'
+        ? bilingual('断开中...', 'Disconnecting...')
+        : bilingual('连接', 'Connect');
+  ui.connect.disabled = control.disabled;
+  ui.connect.classList.toggle('is-danger', control.danger);
+  ui.connect.dataset.action = control.action;
+  ui.connect.querySelector<HTMLElement>('.button-icon')!.textContent = control.danger ? 'x' : '>_';
+  ui.connect.querySelector<HTMLElement>('span:last-child')!.textContent = controlLabel;
+  ui.connect.setAttribute('aria-label', controlLabel);
+  ui.connect.title = currentSessionId || controlLabel;
+}
+
 function updateConnectionStatus(message: LocalizedMessage): void {
   currentSessionSubtitle = message;
   const text = localize(message);
   ui.sessionSubtitle.textContent = text;
   filePage?.setMessage(text);
-  if (connectionState === 'connecting') {
+  if (connectionState === 'connecting' && sessionOwnsFormTarget()) {
     const btnSpan = ui.connect.querySelector<HTMLElement>('span:last-child');
     if (btnSpan) btnSpan.textContent = text;
   }
@@ -1183,21 +1233,7 @@ function setState(state: ConnectionState, label?: string): void {
   ui.liveOrb.className = `live-orb ${state}`;
   ui.liveOrbLabel.textContent = stateLabel;
   ui.liveOrb.title = stateLabel;
-  const control = resolveConnectionControl(state, historyPasswordLoading);
-  const controlLabel = control.action === 'cancel'
-    ? bilingual('取消连接', 'Cancel connection')
-    : control.action === 'disconnect'
-      ? bilingual('断开', 'Disconnect')
-      : control.action === 'disconnecting'
-        ? bilingual('断开中...', 'Disconnecting...')
-        : bilingual('连接', 'Connect');
-  ui.connect.disabled = control.disabled;
-  ui.connect.classList.toggle('is-danger', control.danger);
-  ui.connect.dataset.action = control.action;
-  ui.connect.querySelector<HTMLElement>('.button-icon')!.textContent = control.danger ? 'x' : '>_';
-  ui.connect.querySelector<HTMLElement>('span:last-child')!.textContent = controlLabel;
-  ui.connect.setAttribute('aria-label', controlLabel);
-  ui.connect.title = currentSessionId || controlLabel;
+  renderConnectControl();
   terminalTools?.setConnected(state === 'connected');
 }
 
@@ -1708,15 +1744,26 @@ function handleSshReconnectLog(entry: ReconnectLogEntry): void {
 }
 
 async function connect(): Promise<void> {
-  if (connectionState === 'connecting' || connectionState === 'connected' || connectionState === 'disconnecting') return;
-  if (socket || authorizationAbort) return;
   if (historyPasswordLoading) return;
+  applyFormDefaults();
+  if (connectionState === 'connecting' || connectionState === 'connected' || connectionState === 'disconnecting') {
+    // Repeat clicks for the host already online stay a no-op (this also keeps
+    // the reconnect manager from dialling twice).
+    if (targetKey() === currentTargetKey) return;
+    // A different target means "switch session": this page carries one session
+    // at a time. Validate before tearing down, so a typo never drops the live
+    // session, then retire it instead of silently doing nothing.
+    if (validateConnectForm()) return;
+    disconnect(bilingual('已切换到新的主机目标', 'Switched to a new host target'));
+    await waitForIdle();
+    if (connectionState === 'connecting' || connectionState === 'connected' || connectionState === 'disconnecting') return;
+  }
+  if (socket || authorizationAbort) return;
   historyPasswordLoadGeneration++;
   historyPasswordLoading = false;
   // Fresh baseline for a new session: the previous run may have left network
   // state (interface list, baselines) if the user navigated away uncleanly.
   resetNetworkMetric();
-  applyFormDefaults();
   const validationError = validateConnectForm();
   if (validationError) {
     showFormError(validationError);
@@ -2070,7 +2117,9 @@ for (const radio of ui.form.querySelectorAll<HTMLInputElement>('input[name="auth
 }
 ui.form.addEventListener('submit', (formEvent) => {
   formEvent.preventDefault();
-  if (connectionState === 'connecting' || connectionState === 'connected') {
+  // Disconnect only ever applies to the session that owns the current form
+  // target; with another host selected the button must dial that host instead.
+  if (sessionOwnsFormTarget()) {
     disconnect(connectionState === 'connecting'
       ? bilingual('连接已取消', 'Connection cancelled')
       : bilingual('已由用户断开连接', 'Disconnected by user'));
@@ -2084,7 +2133,11 @@ ui.password.addEventListener('input', () => {
   passwordDirty = true;
 });
 for (const field of [ui.host, ui.port, ui.username]) {
-  field.addEventListener('input', cancelHistoryPasswordLoad);
+  field.addEventListener('input', () => {
+    cancelHistoryPasswordLoad();
+    // Editing the target by hand changes which session the button acts on.
+    renderConnectControl();
+  });
 }
 ui.revealPassword.addEventListener('click', () => {
   const reveal = ui.password.type === 'password';
