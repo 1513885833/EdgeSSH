@@ -151,9 +151,9 @@ const STATIC_MESSAGE_TRANSLATIONS: Record<string, string> = {
   '端口必须介于 1 和 65535 之间。': 'Port must be between 1 and 65535.',
   '请输入有效的 SSH 用户名。': 'Enter a valid SSH username.',
   '主机指纹必须使用 SHA256:base64 格式。': 'Host fingerprint must use the SHA256:base64 format.',
-  '请粘贴或选择未加密的 OpenSSH 私钥。': 'Paste or choose an unencrypted OpenSSH private key.',
+  '请粘贴或选择 OpenSSH 私钥。': 'Paste or choose an OpenSSH private key.',
   '私钥大于 64 KiB。': 'The private key is larger than 64 KiB.',
-  '仅支持未加密的 OpenSSH 私钥。': 'Only unencrypted OpenSSH private keys are supported.',
+  '仅支持 OpenSSH 私钥。': 'Only OpenSSH private keys are supported.',
   '请检查必填项和字段格式。': 'Check the required fields and their formats.',
 };
 
@@ -906,6 +906,7 @@ function readProfileFromForm(password: string): Promise<SavedProfile> {
   if (profile.authMethod === 'password') profile.password = password;
   else if (usesKeychain()) profile.keychainId = ui.keychainId.value;
   else profile.privateKey = ui.privateKey.value;
+  if (profile.authMethod === 'publickey') profile.keyPassphrase = ui.keyPassphrase.value;
   return Promise.resolve(profile);
 }
 
@@ -929,9 +930,9 @@ function validateConnection(): string | null {
     if (!ui.keychainId.value) return bilingual('请选择密钥链中的密钥。', 'Select a saved key.');
   } else if (authMethod() === 'publickey') {
     const key = ui.privateKey.value.trim();
-    if (!key) return bilingual('请粘贴或选择未加密的 OpenSSH 私钥。', 'Paste or choose an unencrypted OpenSSH private key.');
+    if (!key) return bilingual('请粘贴或选择 OpenSSH 私钥。', 'Paste or choose an OpenSSH private key.');
     if (new TextEncoder().encode(key).length > MAX_KEY_BYTES) return bilingual('私钥大于 64 KiB。', 'The private key is larger than 64 KiB.');
-    if (!key.includes('BEGIN OPENSSH PRIVATE KEY')) return bilingual('仅支持未加密的 OpenSSH 私钥。', 'Only unencrypted OpenSSH private keys are supported.');
+    if (!key.includes('BEGIN OPENSSH PRIVATE KEY')) return bilingual('仅支持 OpenSSH 私钥。', 'Only OpenSSH private keys are supported.');
   }
   return null;
 }

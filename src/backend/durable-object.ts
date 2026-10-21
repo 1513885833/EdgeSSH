@@ -3,6 +3,7 @@ import { parseConnectMessage, type Env } from '../types';
 import { assertPublicTarget, toSocketHostname } from './security';
 import { createTicket, verifyTicket } from './security';
 import { SSHSession, SSHAuthDefectError } from './session';
+import { SSHAuth } from '../ssh/auth';
 import { readKeychainKey } from '../accounts/keychain';
 import { APIError } from '../accounts/http';
 import { ForwardingState } from '../forwarding/state';
@@ -71,6 +72,15 @@ export class SSHSessionDO implements DurableObject {
     if (url.pathname === '/preview-launch' || url.pathname === '/preview-http') return this.forwarding.preview(request);
     const accountId = request.headers.get('x-account-id');
     if (!accountId) return Response.json({ error: 'Authentication required' }, { status: 401 });
+    // 已认证的密钥库 API 通过 binding 调用，不创建 SSH 会话或写入存储。
+    if (url.pathname === '/keychain-key-info' && request.method === 'POST') {
+      const { privateKey, passphrase } = await request.json<{ privateKey: string; passphrase: string }>();
+      try {
+        return Response.json(await SSHAuth.publicKeyInfo(privateKey, passphrase));
+      } catch (error) {
+        return Response.json({ error: error instanceof Error ? error.message : 'Invalid private key' }, { status: 400 });
+      }
+    }
     if (url.pathname === '/ticket' && request.method === 'POST') {
       const ip = request.headers.get('x-client-ip') ?? 'unknown';
       if (!/^[0-9a-f:.]{2,64}$|^local$|^unknown$/i.test(ip)) return Response.json({ error: 'Invalid client address' }, { status: 400 });

@@ -63,7 +63,20 @@ export async function keychainRoute(request: Request, env: Env, accountId: strin
   const passphrase = typeof body.passphrase === 'string' ? body.passphrase : previous?.passphrase;
   if (passphrase !== undefined && passphrase.length > 1024) throw new APIError('私钥口令不能超过 1024 个字符。');
   let info;
-  try { info = await SSHAuth.publicKeyInfo(privateKey, passphrase); }
+  try {
+    // bcrypt 派生在 DO 执行，避免普通 Worker 的免费 CPU 限额。
+    if (passphrase) {
+      const object = env.SSH_SESSIONS.get(env.SSH_SESSIONS.idFromName(`keychain-validation:${accountId}`));
+      const response = await object.fetch(new Request('https://session.internal/keychain-key-info', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-account-id': accountId },
+        body: JSON.stringify({ privateKey, passphrase }),
+      }));
+      if (!response.ok) throw new Error((await response.json<{ error: string }>()).error);
+      info = await response.json<{ publicKey: string; fingerprint: string }>();
+    } else {
+      info = await SSHAuth.publicKeyInfo(privateKey, passphrase);
+    }
+  }
   catch (error) {
     throw new APIError(error instanceof Error && error.message.startsWith('Incorrect private key passphrase')
       ? '私钥口令不正确。'

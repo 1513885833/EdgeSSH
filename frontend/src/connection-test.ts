@@ -20,7 +20,6 @@ export interface TestConnectionResult {
 
 interface ServerMessage {
   type?: string;
-  event?: string;
   message?: string;
   fingerprint?: string;
   trusted?: boolean;
@@ -36,11 +35,11 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 function describeFailure(message: ServerMessage): string {
   const raw = message.message ?? '';
   const lower = raw.toLowerCase();
-  if (lower.includes('authentication failed') || lower.includes('host key changed')) {
+  if (lower.includes('authentication failed')) {
     return '认证失败：请检查用户名、凭据，以及服务器是否启用了对应的认证方式。';
   }
-  if (lower.includes('host key mismatch') || lower.includes('fingerprint')) {
-    return '主机指纹不匹配：请核对高级设置里的主机指纹，或留空后重新测试。';
+  if (lower.includes('host key mismatch') || lower.includes('host key changed') || lower.includes('fingerprint')) {
+    return '主机指纹不匹配：请核对服务器指纹与高级设置里的主机指纹。';
   }
   if (lower.includes('enotfound') || lower.includes('dns') || lower.includes('getaddrinfo')) {
     return '主机地址无法解析：请检查域名或 IP 是否正确。';
@@ -129,6 +128,10 @@ export async function testConnection(
 
       if (message.type === 'host_key') {
         serverFingerprint = message.fingerprint;
+        if (input.fingerprint && message.fingerprint !== input.fingerprint) {
+          finish({ ok: false, message: '主机指纹不匹配：请核对服务器指纹与高级设置里的主机指纹。', fingerprint: serverFingerprint });
+          return;
+        }
         // 测试只是核对，不会真正落下 shell；这里接受指纹以便握手继续，
         // 并把真实指纹带回给调用方展示。
         if (message.trusted === false && message.fingerprint) {
@@ -137,10 +140,9 @@ export async function testConnection(
         return;
       }
       if (message.type === 'ready') {
-        const changed = message.event === 'ready' && Boolean(serverFingerprint);
         finish({
           ok: true,
-          message: changed ? 'SSH 认证成功，请核对下方指纹后保存。' : 'SSH 认证成功，可以保存这台主机。',
+          message: serverFingerprint && !input.fingerprint ? 'SSH 认证成功，请核对下方指纹后保存。' : 'SSH 认证成功，可以保存这台主机。',
           fingerprint: serverFingerprint,
         });
         return;
@@ -151,7 +153,6 @@ export async function testConnection(
     });
 
     socket.addEventListener('close', (event) => {
-      if (event.code === 1000) return;
       finish({ ok: false, message: `SSH 连接在认证完成前被关闭（代码 ${event.code}），请重试。` });
     });
 

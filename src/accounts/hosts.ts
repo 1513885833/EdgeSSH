@@ -64,9 +64,12 @@ function validate(body: Record<string, unknown>, previous?: HostPayload): HostPa
       : body.privateKey !== undefined ? { privateKey: body.privateKey }
         : previous?.keychainId ? { keychainId: previous.keychainId } : { privateKey: previous?.privateKey }
     : { password: body.password ?? (previous && previous.authMethod === authMethod ? previous.password : undefined) };
-  // 私钥口令：不填则沿用旧值，显式传空串表示清除；仅公钥认证下有意义。
+  // 只有沿用同一私钥或密钥引用时才保留旧口令；更换凭据后不能把旧口令套给新密钥。
+  const sameCredential = previous?.authMethod === 'publickey'
+    && ('keychainId' in credential ? credential.keychainId === previous.keychainId
+      : !previous.keychainId && credential.privateKey === previous.privateKey);
   const keyPassphrase = authMethod === 'publickey'
-    ? ((typeof body.keyPassphrase === 'string' ? body.keyPassphrase : previous?.keyPassphrase) || undefined)
+    ? ((typeof body.keyPassphrase === 'string' ? body.keyPassphrase : sameCredential ? previous?.keyPassphrase : undefined) || undefined)
     : undefined;
   let connection;
   try {

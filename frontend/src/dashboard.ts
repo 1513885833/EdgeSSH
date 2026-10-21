@@ -498,10 +498,11 @@ export class Dashboard {
   private async test(): Promise<void> {
     if (this.busy || !this.form.reportValidity()) return;
     const value = (name: string) => this.field(name).value;
-    const method: 'password' | 'publickey' = value('authMethod') === 'password' ? 'password' : 'publickey';
+    const selection = value('authMethod');
+    const method: 'password' | 'publickey' = selection === 'password' ? 'password' : 'publickey';
     let password = method === 'password' ? value('password') : '';
-    let privateKey = method === 'publickey' ? value('privateKey').trim() : '';
-    let keychainId = method === 'publickey' ? value('keychainId') : '';
+    let privateKey = selection === 'publickey' ? value('privateKey').trim() : '';
+    const keychainId = selection === 'keychain' ? value('keychainId') : '';
     let keyPassphrase = method === 'publickey' ? value('keyPassphrase') : '';
 
     this.busy = true;
@@ -513,12 +514,16 @@ export class Dashboard {
     try {
       // 编辑既有主机时凭据可以留空以沿用原凭据，这里取回已保存凭据做真实探测，
       // 保证测试与后续保存使用同一份凭据。
-      if (this.editing && ((method === 'password' && !password) || (method === 'publickey' && !privateKey && !keychainId))) {
+      const keepCredential = this.editing?.authMethod === method && (selection === 'password'
+        ? !password
+        : selection === 'keychain' ? keychainId === this.editing.keychainId : !privateKey && !this.editing.keychainId);
+      if (this.editing && keepCredential) {
         const saved = await hostCredentials(this.editing.id);
-        password = password || saved.password || '';
-        privateKey = privateKey || saved.privateKey || '';
-        keychainId = keychainId || saved.keychainId || '';
-        keyPassphrase = keyPassphrase || saved.keyPassphrase || '';
+        if (selection === 'password') password = saved.password ?? '';
+        else {
+          if (selection === 'publickey') privateKey = saved.privateKey ?? '';
+          keyPassphrase = keyPassphrase || saved.keyPassphrase || '';
+        }
       }
       const result = await testConnection({
         host: value('host').trim(), port: Number(value('port')), username: value('username').trim(),
