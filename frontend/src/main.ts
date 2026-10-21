@@ -494,7 +494,7 @@ function drawNetworkSparkline(): void {
   const slot = width / NET_SPARK_POINTS;
   // Leave a small gap between bars; floor so a 1px slot still draws a visible bar.
   const barWidth = Math.max(1, Math.floor(slot * 0.7));
-  ctx.fillStyle = '#69e6b4';
+  ctx.fillStyle = currentColorScheme() === 'light' ? '#0f7a58' : '#69e6b4';
   for (let i = 0; i < NET_SPARK_POINTS; i += 1) {
     const value = data[i];
     const normalized = (value - minimum) / span;
@@ -700,7 +700,40 @@ processManager = new ProcessManager({
   onNetworkSample: (sample, timestamp) => updateNetworkMetric(sample, timestamp),
 });
 
-function terminalTheme(): Record<string, string> {
+type ColorScheme = 'dark' | 'light';
+
+function currentColorScheme(): ColorScheme {
+  return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+}
+
+// Declared as function bodies (not module-level consts) because `terminal` is
+// constructed above and reads this palette during module evaluation.
+function terminalTheme(scheme: ColorScheme = currentColorScheme()): Record<string, string> {
+  if (scheme === 'light') {
+    return {
+      background: '#ffffff',
+      foreground: '#1b2a30',
+      cursor: '#0f7a58',
+      cursorAccent: '#ffffff',
+      selectionBackground: '#c7e8da',
+      black: '#25343b',
+      red: '#c63d4b',
+      green: '#12825f',
+      yellow: '#a86c0c',
+      blue: '#246da8',
+      magenta: '#7b3fa8',
+      cyan: '#0f7285',
+      white: '#4a5c64',
+      brightBlack: '#6b8089',
+      brightRed: '#e05a68',
+      brightGreen: '#2aa37a',
+      brightYellow: '#c98a1e',
+      brightBlue: '#3d8fd0',
+      brightMagenta: '#9b5fd0',
+      brightCyan: '#1b97ad',
+      brightWhite: '#0f2027',
+    };
+  }
   return {
     background: '#080d12',
     foreground: '#d7e2e6',
@@ -724,6 +757,11 @@ function terminalTheme(): Record<string, string> {
     brightCyan: '#99edf5',
     brightWhite: '#f7fbfc',
   };
+}
+
+function applyTerminalTheme(): void {
+  terminal.options.theme = terminalTheme();
+  drawNetworkSparkline();
 }
 
 function passwordContext(profile: Pick<SavedProfile, 'host' | 'port' | 'username'>): string {
@@ -2147,6 +2185,7 @@ ui.themeToggle.addEventListener('click', () => {
   const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
   document.documentElement.dataset.theme = next;
   try { localStorage.setItem(THEME_STORAGE_KEY, next); } catch { /* Theme still applies for this page. */ }
+  applyTerminalTheme();
 });
 ui.hostKeyDialog.addEventListener('cancel', (cancelEvent) => {
   cancelEvent.preventDefault();
@@ -2186,6 +2225,7 @@ document.addEventListener('keydown', (keyEvent) => {
 let storedTheme: string | null = null;
 try { storedTheme = localStorage.getItem(THEME_STORAGE_KEY); } catch { /* Storage can be disabled. */ }
 if (storedTheme === 'light' || storedTheme === 'dark') document.documentElement.dataset.theme = storedTheme;
+applyTerminalTheme();
 async function initialize(): Promise<void> {
   applyLanguage(currentLanguage);
   renderProfiles();
