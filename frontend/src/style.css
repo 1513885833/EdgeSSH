@@ -228,6 +228,8 @@ button:disabled {
 
 .brand-group,
 .topbar-actions {
+  /* 顶栏注入的导航按钮（文件管理 / 主机总览 / 端口转发）会撑宽这一组；允许收缩才能避免溢出屏幕。 */
+  min-width: 0;
   gap: 12px;
 }
 
