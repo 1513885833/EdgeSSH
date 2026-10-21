@@ -613,12 +613,29 @@ button:disabled {
   font-weight: 700;
 }
 
+.profile-avatar.region {
+  padding: 0;
+  background: color-mix(in srgb, var(--surface-3) 60%, transparent);
+}
+
+.profile-avatar.region .country-flag {
+  width: 24px;
+  height: 18px;
+  border-radius: 2px;
+}
+
+.profile-avatar.region.unknown {
+  font-size: 14px;
+  color: var(--muted-2);
+}
+
 .profile-copy {
   min-width: 0;
 }
 
 .profile-copy strong,
-.profile-copy time {
+.profile-copy time,
+.profile-copy .profile-address {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -628,6 +645,13 @@ button:disabled {
 .profile-copy strong {
   margin-bottom: 3px;
   font-size: 12px;
+}
+
+.profile-copy .profile-address {
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
 }
 
 .profile-copy time,

@@ -12,6 +12,7 @@ import { resolveConnectionControl, resolveConnectionPanel } from './ui-state';
 import { classifyHostKey, SSH_FINGERPRINT_RE, type HostKeyPrompt } from './host-key';
 import { FileManager, collectFileManagerElements } from './file-manager';
 import { FileTree } from './file-tree';
+import { countryFlag } from './flags';
 import { ProcessManager, collectProcessManagerElements, type NetworkSample } from './process-manager';
 import { resetTerminalForConnection } from './terminal-session';
 import { createTerminalTools, type TerminalToolsController } from './terminal-tools';
@@ -1086,27 +1087,47 @@ function renderProfiles(): void {
     main.className = 'profile-main';
     main.type = 'button';
     main.dataset.profileId = profile.id;
-    const avatar = document.createElement('span');
-    avatar.className = 'profile-avatar';
-    avatar.textContent = profile.username.slice(0, 2).toUpperCase();
+    // 与首页主机列表保持一致：图标用地区（国旗），并在 user@host:port 上方显示主机名称。
+    const region = document.createElement('span');
+    region.className = 'profile-avatar region';
+    if (profile.location?.countryCode) {
+      region.append(countryFlag(profile.location.countryCode));
+      const place = profile.location.city || profile.location.region || profile.location.country;
+      region.setAttribute('role', 'img');
+      region.setAttribute('aria-label', [place, profile.location.country].filter(Boolean).join(' · '));
+      region.title = [place, profile.location.region, profile.location.ip].filter(Boolean).join(' · ');
+    } else {
+      region.classList.add('unknown');
+      region.textContent = '🌐';
+      region.setAttribute('role', 'img');
+      region.setAttribute('aria-label', bilingual('位置未知', 'Location unknown'));
+      region.title = bilingual('位置未知', 'Location unknown');
+    }
     const copy = document.createElement('span');
     copy.className = 'profile-copy';
-    const title = document.createElement('strong');
     const label = targetLabel(profile.host, profile.port, profile.username);
-    title.textContent = label;
+    const displayName = profile.name?.trim() || label;
+    const name = document.createElement('strong');
+    name.className = 'profile-name';
+    name.textContent = displayName;
+    name.title = displayName;
+    const address = document.createElement('span');
+    address.className = 'profile-address';
+    address.textContent = label;
+    address.title = label;
     const lastConnected = document.createElement('time');
     const connectedAt = new Date(Math.min(profile.updatedAt, Date.now()));
     lastConnected.dateTime = connectedAt.toISOString();
     const formattedTime = new Intl.DateTimeFormat(currentLanguage, { dateStyle: 'medium', timeStyle: 'short' }).format(connectedAt);
     lastConnected.textContent = bilingual(`最后连接：${formattedTime}`, `Last connected: ${formattedTime}`);
-    copy.append(title, lastConnected);
-    main.append(avatar, copy);
+    copy.append(name, address, lastConnected);
+    main.append(region, copy);
 
     const remove = document.createElement('button');
     remove.className = 'profile-delete';
     remove.type = 'button';
     remove.dataset.deleteProfile = profile.id;
-    remove.setAttribute('aria-label', bilingual(`删除 ${label}`, `Delete ${label}`));
+    remove.setAttribute('aria-label', bilingual(`删除 ${displayName}`, `Delete ${displayName}`));
     remove.textContent = '\u00d7';
     card.append(main, remove);
     ui.profileList.append(card);
