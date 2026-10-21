@@ -34,6 +34,17 @@
   --term-scanline: rgba(255, 255, 255, 0.012);
   --term-rate-up: #e0857a;
   --term-rate-down: #82c898;
+  --term-title: #c5d2db;
+  --term-metric-text: #a8b8c1;
+  --term-metric-label: #8fa2ad;
+  --term-metric-value: #d4e0e5;
+  --term-metric-detail: #9aadb7;
+  --term-usage-mix: 88%;
+  --term-track: #263642;
+  --term-card: #182530;
+  --term-card-edge: rgba(0, 0, 0, 0);
+  --term-select-bg: #182530;
+  --term-select-border: #263642;
   --border: #253341;
   --border-soft: #19242e;
   --text: #e9f0f3;
@@ -67,8 +78,8 @@
   --term-control-border-hover: #8ba49f;
   --term-control-text: #1b2a30;
   --term-border: #c5d5d3;
-  --term-muted: #5c7076;
-  --term-muted-2: #6f878f;
+  --term-muted: #4f6369;
+  --term-muted-2: #566e74;
   --term-input: #ffffff;
   --term-scrollbar: #9fb5b3;
   --term-hover: #d2e5e1;
@@ -86,6 +97,17 @@
   --term-scanline: rgba(23, 35, 41, 0.035);
   --term-rate-up: #b2473c;
   --term-rate-down: #177a4e;
+  --term-title: #10323b;
+  --term-metric-text: #3d545a;
+  --term-metric-label: #53686e;
+  --term-metric-value: #14272d;
+  --term-metric-detail: #587077;
+  --term-usage-mix: 40%;
+  --term-track: #ccdcda;
+  --term-card: #eff5f3;
+  --term-card-edge: #bcd0cd;
+  --term-select-bg: #ffffff;
+  --term-select-border: #b7cac8;
   --border: #cbd9d8;
   --border-soft: #dce7e5;
   --text: #172329;
@@ -1004,12 +1026,12 @@ button:disabled {
 
 .session-target strong {
   margin-bottom: 2px;
-  color: #c5d2db;
+  color: var(--term-title);
   font-size: 12px;
 }
 
 .session-target span {
-  color: #6f818d;
+  color: var(--term-muted-2);
   font-family: var(--mono);
   font-size: 9px;
 }
@@ -1025,7 +1047,7 @@ button:disabled {
 .session-metrics > div {
   min-width: 72px;             /* widened from 53px to cover "01:00:00" / "999 ms" content without sub-pixel re-layout */
   padding: 0 7px;
-  border-left: 1px solid #1c2932;
+  border-left: 1px solid var(--term-border);
   font-variant-numeric: tabular-nums;  /* tabular numerals — defensive even though --mono is monospace */
 }
 
@@ -1047,7 +1069,7 @@ button:disabled {
 .resource-metric {
   min-width: 60px;             /* integer-pixel floor — absorbs sub-pixel flex-distribution jitter from sibling .session-metrics */
   flex: 1 1 0;
-  color: #a8b8c1;
+  color: var(--term-metric-text);
   font-family: var(--mono);
   font-size: 10px;
   white-space: nowrap;
@@ -1055,7 +1077,7 @@ button:disabled {
 
 .resource-metric + .resource-metric {
   padding-left: 12px;
-  border-left: 1px solid #1c2932;
+  border-left: 1px solid var(--term-border);
 }
 
 .resource-metric-line {
@@ -1067,7 +1089,7 @@ button:disabled {
 
 .resource-metric-line > span {
   flex: 0 0 auto;
-  color: #8fa2ad;
+  color: var(--term-metric-label);
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.02em;
@@ -1076,14 +1098,17 @@ button:disabled {
 .resource-metric-line > strong {
   flex: 0 0 auto;
   overflow: hidden;
-  color: #d4e0e5;
+  color: var(--term-metric-value);
   font-size: 10px;
   font-weight: 750;
   text-overflow: ellipsis;
 }
 
+/* Usage colors come from usageColor() (hsl at 58% lightness, tuned for the dark
+   surface). In the light theme they read as washed-out text, so pull them toward
+   the theme text color first — the mix ratio is theme-owned, not hardcoded. */
 .resource-metric-line > .resource-percentage {
-  color: color-mix(in srgb, var(--usage-color, #d4e0e5) 88%, var(--text));
+  color: color-mix(in srgb, var(--usage-color, var(--term-metric-value)) var(--term-usage-mix, 88%), var(--text));
   font-weight: 900;
   transition: color 220ms ease;
 }
@@ -1091,7 +1116,7 @@ button:disabled {
 .resource-metric-line > .resource-detail {
   min-width: 0;
   flex: 1 1 auto;
-  color: #9aadb7;
+  color: var(--term-metric-detail);
   font-weight: 400;
   text-align: right;
 }
@@ -1109,7 +1134,7 @@ button:disabled {
 
 .resource-metric progress::-webkit-progress-bar {
   border-radius: 99px;
-  background: #263642;
+  background: var(--term-track);
 }
 
 .resource-metric progress::-webkit-progress-value {
@@ -1128,8 +1153,11 @@ button:disabled {
   display: block;
   height: 12px;
   margin-top: 1px;
-  background: #182530;
+  background: var(--term-card);
   border-radius: 4px;
+  /* inset ring instead of a real border: gives the light theme a visible card
+     edge without changing the box size this element relies on to stay stable */
+  box-shadow: inset 0 0 0 1px var(--term-card-edge);
   /* Width is now content-driven (canvas drawing buffer = 184px HTML attr),
      with explicit floor/ceiling so the parent's flex algorithm has a stable
      size to compute against — breaks the previous width: 100% cycle that
@@ -1144,7 +1172,7 @@ button:disabled {
 
 .resource-network #resource-network-iface {
   flex: 0 0 auto;
-  color: #8fa2ad;
+  color: var(--term-metric-label);
   font-weight: 400;
   letter-spacing: 0.02em;
 }
@@ -1157,12 +1185,12 @@ button:disabled {
   min-width: 52px;
   max-width: 110px;
   padding: 0 4px;
-  color: #d4e0e5;
+  color: var(--term-metric-value);
   font-family: var(--mono);
   font-size: 10px;
   line-height: 1.4;
-  background: #182530;
-  border: 1px solid #263642;
+  background: var(--term-select-bg);
+  border: 1px solid var(--term-select-border);
   border-radius: 4px;
   cursor: pointer;
 }
@@ -1175,8 +1203,8 @@ button:disabled {
    native picker readable on every platform. Note: iOS Safari renders its own
    system wheel picker that is not styleable via CSS (platform limitation). */
 .resource-network .resource-network-select option {
-  background-color: #182530;
-  color: #d4e0e5;
+  background-color: var(--term-select-bg);
+  color: var(--term-metric-value);
 }
 
 .resource-network .resource-network-select:hover,
@@ -1331,6 +1359,14 @@ button:disabled {
 #terminal {
   width: 100%;
   height: 100%;
+}
+
+/* xterm ships `.xterm .xterm-viewport { background-color: #000 }`. The viewport
+   is taller than the rows whenever the grid does not fill it, so the leftover
+   strip directly above the key bar rendered black in every theme. Paint it with
+   the same surface color instead. */
+.terminal-stage .xterm .xterm-viewport {
+  background-color: var(--terminal);
 }
 
 .terminal-tools {
