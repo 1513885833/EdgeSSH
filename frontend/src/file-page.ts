@@ -190,6 +190,8 @@ export class FilePage {
   }
 
   confirmLeave(): boolean {
+    // 编辑器里的未保存改动同样不能静默丢弃。
+    if (!this.manager.confirmEditorLeave()) return false;
     // 只有正在传输时才打断导航，避免用户无意中取消上传或下载。
     const progress = this.panel.querySelector<HTMLElement>('#file-manager-progress')!;
     return progress.hidden || confirm('文件正在传输，离开或断开连接将取消传输。仍要继续吗？');

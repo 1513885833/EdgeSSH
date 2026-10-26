@@ -24,6 +24,11 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
   const sshSockets: WebSocketRoute[] = [];
   const sftpSockets: WebSocketRoute[] = [];
   const uploaded: Buffer[] = [];
+  // 在线编辑器读取/保存的远端文本文件；mtime 用于冲突校验，测试可直接改它模拟他人修改。
+  const textFiles = new Map([
+    ['/root/README.md', { content: '# Edge SSH\n\n<script>window.__xss = 1</script>\n\n[bad](javascript:alert(1))\n', mtime: 1_790_100_000 }],
+    ['/root/nginx.conf', { content: 'server {\n  listen 80;\n}\n', mtime: 1_790_100_000 }],
+  ]);
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/auth/me') return route.fulfill({ json: { account: { username: 'Administrator' }, provider: 'cloudflare' } });
@@ -87,13 +92,35 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
         directories.set(parent(path), directories.get(parent(path))!.filter((item) => item.name !== name(path)));
       }
       if (['sftp_mkdir', 'sftp_rename', 'sftp_delete', 'sftp_rmdir'].includes(type)) send({ type: `${type}_result`, requestId });
+      if (type === 'sftp_read_text') {
+        const file = textFiles.get(path);
+        if (!file) send({ type: 'sftp_error', requestId, operation: 'read', message: 'No such file' });
+        else send({
+          type: 'sftp_read_text_result', requestId, path,
+          content: file.content, size: Buffer.byteLength(file.content), mtime: file.mtime, mode: 0o100644,
+        });
+      }
       if (type === 'sftp_upload_start') {
+        const target = textFiles.get(path);
+        if (typeof message.expectedMtime === 'number' && (!target || target.mtime !== message.expectedMtime)) {
+          send({ type: 'sftp_error', requestId, operation: 'upload', conflict: true, message: 'The remote file changed since it was opened' });
+          return;
+        }
         upload = message;
+        uploaded.length = 0;
         if (!options.holdUpload) send({ type: 'sftp_upload_ready', requestId });
       }
       if (type === 'sftp_upload_end') {
-        directories.get(parent(upload!.path))!.push(entry(name(upload!.path), 'file', upload!.size));
-        send({ type: 'sftp_upload_complete', requestId });
+        const list = directories.get(parent(upload!.path))!;
+        const existing = list.find((item) => item.name === name(upload!.path));
+        if (existing) existing.size = upload!.size;
+        else list.push(entry(name(upload!.path), 'file', upload!.size));
+        const target = textFiles.get(upload!.path);
+        if (target) {
+          target.content = Buffer.concat(uploaded).toString('utf8');
+          target.mtime += 1;
+        }
+        send({ type: 'sftp_upload_complete', requestId, size: upload!.size, mtime: target?.mtime });
       }
       if (type === 'sftp_download') {
         const data = Buffer.from('hello files\n');
@@ -105,7 +132,7 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
   });
   await page.goto('/');
   await page.locator('#rail-files').click();
-  return { hosts, calls, sshSockets, sftpSockets, uploaded, directories };
+  return { hosts, calls, sshSockets, sftpSockets, uploaded, directories, textFiles };
 }
 
 export async function connectFiles(page: Page, id = 'alpha') {

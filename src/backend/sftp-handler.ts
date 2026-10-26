@@ -3,11 +3,13 @@ import {
   SFTPClient,
   SFTPStatusError,
   SFTP_OPEN_FLAGS,
+  SFTP_STATUS,
   getSFTPFileKind,
   formatSFTPPermissions,
   type SFTPAttrs,
   type SFTPDirEntry,
 } from '../ssh/sftp';
+import { MAX_TEXT_FILE_SIZE, TextFileError, assertTextFileSize, decodeTextFile } from './text-file';
 
 const MAX_PATH_BYTES = 4096;
 const MAX_DIRECTORY_ENTRIES = 2000;
@@ -34,6 +36,14 @@ interface UploadState {
 interface DownloadState {
   requestId: string;
   cancelled: boolean;
+}
+
+/** 打开时的远端 mtime 已变；拒绝写入，由前端提示用户决定是否覆盖。 */
+export class SFTPConflictError extends Error {
+  constructor(message = 'The remote file changed since it was opened') {
+    super(message);
+    this.name = 'SFTPConflictError';
+  }
 }
 
 export class SFTPHandler {
@@ -184,16 +194,71 @@ export class SFTPHandler {
     if (this.activeDownload?.requestId === requestId) this.activeDownload.cancelled = true;
   }
 
-  async startUpload(requestId: string, path: string, size: number, overwrite: boolean): Promise<void> {
+  /** 读取在线编辑器所需的文本文件；正文走 JSON 控制消息，调用方已按 16 KiB 上限放行结果。 */
+  async readText(requestId: string, path: string): Promise<void> {
+    let handle: Uint8Array | null = null;
+    try {
+      this.assertReady();
+      this.validatePath(path);
+      const attrs = await this.client.stat(path);
+      const size = this.safeSize(attrs);
+      assertTextFileSize(size);
+      handle = await this.client.openFile(path, SFTP_OPEN_FLAGS.READ);
+      const chunks: Uint8Array[] = [];
+      let offset = 0;
+      while (size === null || offset < size) {
+        const length = size === null ? TRANSFER_CHUNK_SIZE : Math.min(TRANSFER_CHUNK_SIZE, size - offset);
+        if (length === 0) break;
+        const chunk = await this.client.readFile(handle, offset, length);
+        if (chunk === null || chunk.length === 0) break;
+        if (offset + chunk.length > MAX_TEXT_FILE_SIZE) {
+          throw new TextFileError('too-large', 'File exceeds the 2 MiB editor limit');
+        }
+        chunks.push(chunk);
+        offset += chunk.length;
+      }
+      const bytes = new Uint8Array(offset);
+      let written = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, written);
+        written += chunk.length;
+      }
+      const content = decodeTextFile(bytes);
+      this.sendJSON({
+        type: 'sftp_read_text_result',
+        requestId,
+        path,
+        content,
+        size: offset,
+        mtime: attrs.mtime ?? 0,
+        mode: attrs.permissions ?? 0,
+      });
+    } catch (error) {
+      this.reportError('read', error, requestId);
+    } finally {
+      if (handle) await this.client.closeHandle(handle).catch(() => undefined);
+    }
+  }
+
+  async startUpload(
+    requestId: string,
+    path: string,
+    size: number,
+    overwrite: boolean,
+    expectedMtime?: number | null,
+  ): Promise<void> {
     try {
       this.assertReady();
       this.validatePath(path);
       if (this.upload) throw new Error('Another upload is already in progress');
       if (!Number.isSafeInteger(size) || size < 0 || size > MAX_FILE_SIZE) throw new Error('Invalid upload size or file exceeds the 64 MiB transfer limit');
+      const permissions = overwrite ? await this.destinationPermissions(path, expectedMtime) : undefined;
       const uploadPath = overwrite ? this.temporaryUploadPath(path) : path;
+      // 覆盖写：临时文件直接按原文件权限位创建，rename 后权限与创建前一致。
       const handle = await this.client.openFile(
         uploadPath,
         SFTP_OPEN_FLAGS.WRITE | SFTP_OPEN_FLAGS.CREATE | SFTP_OPEN_FLAGS.TRUNCATE | SFTP_OPEN_FLAGS.EXCLUSIVE,
+        permissions === undefined ? undefined : { permissions },
       );
       this.upload = {
         requestId,
@@ -240,7 +305,15 @@ export class SFTPHandler {
       upload.handleClosed = true;
       if (upload.temporary) await this.client.rename(upload.uploadPath, upload.destinationPath);
       this.upload = null;
-      this.sendJSON({ type: 'sftp_upload_complete', requestId, path: upload.destinationPath, size: upload.received });
+      let mtime: number | undefined;
+      try {
+        const attrs = await this.client.stat(upload.destinationPath);
+        if (typeof attrs.mtime === 'number') mtime = attrs.mtime;
+      } catch { /* Best effort: callers refresh the listing anyway. */ }
+      this.sendJSON({
+        type: 'sftp_upload_complete', requestId, path: upload.destinationPath, size: upload.received,
+        ...(mtime === undefined ? {} : { mtime }),
+      });
     } catch (error) {
       if (upload) await this.abortUpload(upload, true);
       this.reportError('upload', error, requestId);
@@ -353,6 +426,28 @@ export class SFTPHandler {
     if (this.activeDownload !== download || download.cancelled) throw new Error('Download cancelled');
   }
 
+  /**
+   * 覆盖写前读取目标权限位；带 expectedMtime 时同时做并发冲突校验，
+   * 不一致直接抛 SFTPConflictError（只在控制消息里回报，不创建任何文件）。
+   */
+  private async destinationPermissions(path: string, expectedMtime?: number | null): Promise<number | undefined> {
+    const checkMtime = expectedMtime !== undefined && expectedMtime !== null;
+    let attrs: SFTPAttrs;
+    try {
+      attrs = await this.client.stat(path);
+    } catch (error) {
+      if (!checkMtime) return undefined;
+      if (error instanceof SFTPStatusError && error.code === SFTP_STATUS.NO_SUCH_FILE) {
+        throw new SFTPConflictError('The remote file was removed since it was opened');
+      }
+      throw error;
+    }
+    if (checkMtime && attrs.mtime !== expectedMtime) {
+      throw new SFTPConflictError();
+    }
+    return attrs.permissions === undefined ? undefined : attrs.permissions & 0o7777;
+  }
+
   private temporaryUploadPath(path: string): string {
     const separator = path.lastIndexOf('/');
     const parent = separator >= 0 ? path.slice(0, separator + 1) : '';
@@ -391,6 +486,8 @@ export class SFTPHandler {
   private reportError(operation: string, error: unknown, requestId?: string): void {
     const message = error instanceof Error ? error.message : String(error);
     const code = error instanceof SFTPStatusError ? error.code : undefined;
-    this.sendJSON({ type: 'sftp_error', requestId, operation, code, message });
+    const reason = error instanceof TextFileError ? error.reason : undefined;
+    const conflict = error instanceof SFTPConflictError ? true : undefined;
+    this.sendJSON({ type: 'sftp_error', requestId, operation, code, reason, conflict, message });
   }
 }
