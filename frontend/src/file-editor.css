@@ -18,6 +18,14 @@
   font-family: var(--sans);
 }
 
+/* 全屏：同一个容器换 class，铺满视口；不重建编辑器。 */
+.file-editor.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  border: 0;
+}
+
 .file-editor-header {
   display: flex;
   align-items: center;
@@ -89,6 +97,31 @@
 
 .file-editor.is-dirty .file-editor-state {
   color: #f0c869;
+}
+
+/* 自动保存状态：暂停时必须一眼能看见。 */
+.file-editor-autosave {
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: #8b9aa6;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.file-editor-autosave[data-state="pending"] {
+  color: #8fd3ff;
+}
+
+.file-editor-autosave[data-state="saving"] {
+  color: #69e6b4;
+}
+
+.file-editor-autosave[data-state="paused"] {
+  border-color: rgba(240, 200, 105, 0.55);
+  background: rgba(240, 200, 105, 0.12);
+  color: #f0c869;
+  font-weight: 700;
 }
 
 .file-editor-button {
@@ -245,6 +278,17 @@
 
   .file-editor-state {
     max-width: 120px;
+  }
+
+  .file-editor-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .file-editor-autosave {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .file-editor-button {

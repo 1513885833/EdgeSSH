@@ -1,6 +1,8 @@
 import type { FileListView } from './file-list-view';
 import { MAX_EDITOR_FILE_SIZE, isEditableTextFile } from './file-language';
-import type { EditorDocument, FileEditor } from './file-editor';
+import type { EditorDocument, EditorSaveResult, FileEditor } from './file-editor';
+// 按主机记住路径的模块在连接成功后才按需加载，首屏不带这段逻辑。
+import type { StorageLike } from './file-paths';
 
 export const MAX_SFTP_FILE_SIZE = 64 * 1024 * 1024;
 export const SFTP_UPLOAD_CHUNK_SIZE = 64 * 1024;
@@ -65,6 +67,8 @@ interface PendingRequest {
   path: string;
   historyMode?: 'push' | 'none' | 'index';
   historyIndex?: number;
+  /** 这是「恢复上次目录」的请求；失败时回落 / 并提示，而不是当普通错误。 */
+  restorePath?: boolean;
 }
 
 /** 上传来源：本地文件或编辑器里的文本内容。 */
@@ -82,6 +86,10 @@ interface UploadState {
   /** 仅在编辑器保存时设置：用于 mtime 冲突校验与保存回调。 */
   expectedMtime?: number | null;
   editorContent?: string;
+  /** 这次保存是否由自动保存触发（决定冲突后是「恢复自动保存」还是保留草稿）。 */
+  autoSave?: boolean;
+  /** 保存结束时回调（关闭 / 断开前的 flush 用它等待结果）。 */
+  editorDone?: (completed: boolean) => void;
   sent: number;
   acknowledged: number;
   awaitingAck: boolean;
@@ -106,6 +114,7 @@ interface DownloadState {
 
 type SocketData = string | ArrayBuffer | ArrayBufferView | Blob;
 type JsonRecord = Record<string, unknown>;
+type FilePathsModule = typeof import('./file-paths');
 
 const DISCONNECTED: LocalizedText = {
   zh: '连接 SSH 后即可管理文件',
@@ -188,6 +197,15 @@ function isRecord(value: unknown): value is JsonRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+/** localStorage 在隐私模式 / 被禁用时可能直接抛错，这里统一降级为「不记录」。 */
+function resolvePathStorage(): Pick<StorageLike, 'getItem' | 'setItem'> | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
+
 function numberValue(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
@@ -241,6 +259,20 @@ export class FileManager {
   private editorDocument: EditorDocument | null = null;
   /** 正在读取的文本文件请求；与 pending 里的 readText 对应。 */
   private editorRequest: { requestId: string; path: string; name: string } | null = null;
+  /** 冲突后「以远端为准」的读取请求。 */
+  private reloadRequest: { requestId: string; path: string } | null = null;
+  /** 正在进行的编辑器保存；关闭 / 断开前的 flush 用它等待结果。 */
+  private activeEditorSave: { promise: Promise<boolean>; resolve: (completed: boolean) => void } | null = null;
+  /** 当前主机 id；临时连接没有 id，不写 localStorage。 */
+  private hostId: string | null = null;
+  private readonly pathStorage: Pick<StorageLike, 'getItem' | 'setItem'> | null;
+  private paths: FilePathsModule | null = null;
+  private pathsLoading: Promise<FilePathsModule | null> | null = null;
+  /** 恢复上次目录失败后，等回落列表返回时展示的提示。 */
+  private listNotice: LocalizedText | null = null;
+  /** 冲突确认框正开着：关闭 / 断开不要在同一次交互里再弹第二个确认。 */
+  private conflictPending = false;
+  private disconnectPreparation: Promise<boolean> | null = null;
   private uploadConfirmationPending = false;
   private messageQueue: Promise<void> = Promise.resolve();
   private statusCopy: LocalizedText = DISCONNECTED;
@@ -268,6 +300,7 @@ export class FileManager {
     this.promptAction = options.prompt ?? ((message, value) => window.prompt(message, value));
     this.onError = options.onError;
     this.onStatus = options.onStatus;
+    this.pathStorage = resolvePathStorage();
     this.bindControls();
     this.renderDisconnected();
   }
@@ -380,6 +413,8 @@ export class FileManager {
     this.entries = [];
     this.selectedIndex = -1;
     this.editorRequest = null;
+    this.reloadRequest = null;
+    if (preserveEditor) this.editor?.cancelAutosave();
     if (!preserveEditor) this.closeEditor();
     this.renderDisconnected();
   }
@@ -457,6 +492,11 @@ export class FileManager {
   setListView(view: FileListView | null): void {
     this.listView = view;
     this.renderEntries();
+  }
+
+  /** 由连接层告知当前主机 id；只有带 id 的连接才会记住路径。 */
+  setHostId(hostId: string | null): void {
+    this.hostId = hostId;
   }
 
   selectEntry(index: number): void {
@@ -678,7 +718,7 @@ export class FileManager {
       editor = await module.FileEditor.create({
         localize: (copy) => this.localize(copy),
         requestClose: () => void this.requestCloseEditor(),
-        requestSave: (value) => this.saveEditor(value),
+        requestSave: (value, origin) => this.saveEditor(value, undefined, origin),
       }, document);
     } catch {
       this.showError(this.localize({ zh: '编辑器初始化失败。', en: 'The editor could not be initialized.' }));
@@ -692,6 +732,7 @@ export class FileManager {
     this.editor = editor;
     this.editorDocument = document;
     this.elements.panel.append(editor.element);
+    this.rememberEditorFile(document.path);
     editor.focus();
     this.setStatus({ zh: `正在编辑 ${request.name}`, en: `Editing ${request.name}` });
     this.updateControls();
@@ -701,25 +742,40 @@ export class FileManager {
    * 编辑器保存：复用上传通道（临时文件 + rename）。expectedMtime 为打开时的
    * 远端 mtime，null 表示用户已确认强制覆盖。
    */
-  private saveEditor(content: string, expectedMtime?: number | null): void {
+  private saveEditor(
+    content: string,
+    expectedMtime?: number | null,
+    origin: 'manual' | 'auto' = 'manual',
+    done?: (completed: boolean) => void,
+  ): EditorSaveResult {
     const editor = this.editor;
     const document = this.editorDocument;
-    if (!editor || !document) return;
+    if (!editor || !document) return 'failed';
+    const reject = (message: string): EditorSaveResult => {
+      editor.markSaveFailed(message);
+      done?.(false);
+      return 'failed';
+    };
     if (!this.ready || !this.isSocketOpen()) {
-      editor.markSaveFailed(this.localize({ zh: '保存失败：SFTP 连接已断开。', en: 'Save failed: the SFTP connection is closed.' }));
-      return;
+      return reject(this.localize({ zh: '保存失败：SFTP 连接已断开。', en: 'Save failed: the SFTP connection is closed.' }));
     }
     if (this.hasTransfer()) {
-      editor.markSaveFailed(this.localize({ zh: '保存失败：已有传输进行中，请稍后再试。', en: 'Save failed: another transfer is in progress. Try again shortly.' }));
-      return;
+      // 自动保存遇到其他传输：通道忙，稍后重试；编辑器保存进行中的重复请求交给合并逻辑。
+      if (origin === 'auto' || editor.isSaving()) {
+        done?.(false);
+        return 'retry';
+      }
+      return reject(this.localize({ zh: '保存失败：已有传输进行中，请稍后再试。', en: 'Save failed: another transfer is in progress. Try again shortly.' }));
     }
     const bytes = new TextEncoder().encode(content);
     if (bytes.length > MAX_EDITOR_FILE_SIZE) {
-      editor.markSaveFailed(this.localize({ zh: '保存失败：内容超过 2 MiB 限制。', en: 'Save failed: the content exceeds the 2 MiB limit.' }));
-      return;
+      return reject(this.localize({ zh: '保存失败：内容超过 2 MiB 限制。', en: 'Save failed: the content exceeds the 2 MiB limit.' }));
     }
     const mtimeCheck = expectedMtime === undefined ? document.mtime : expectedMtime;
     const requestId = this.createRequest('upload', document.path);
+    let resolveSave: (completed: boolean) => void = () => undefined;
+    const promise = new Promise<boolean>((resolve) => { resolveSave = resolve; });
+    this.activeEditorSave = { promise, resolve: resolveSave };
     this.uploadState = {
       generation: this.generation,
       requestId,
@@ -731,6 +787,8 @@ export class FileManager {
       path: document.path,
       expectedMtime: mtimeCheck,
       editorContent: content,
+      autoSave: origin === 'auto',
+      editorDone: done,
       sent: 0,
       acknowledged: 0,
       awaitingAck: false,
@@ -745,48 +803,177 @@ export class FileManager {
     const start: JsonRecord = { type: 'sftp_upload_start', requestId, path: document.path, size: bytes.length, overwrite: true };
     if (mtimeCheck !== null) start.expectedMtime = mtimeCheck;
     this.send(start);
+    return 'started';
+  }
+
+  /** 结束一次编辑器保存：唤醒 flush 等待者并回调本次保存的 done。 */
+  private completeEditorSave(state: UploadState, completed: boolean): void {
+    const active = this.activeEditorSave;
+    this.activeEditorSave = null;
+    active?.resolve(completed);
+    const done = state.editorDone;
+    state.editorDone = undefined;
+    done?.(completed);
+  }
+
+  /**
+   * 关闭 / 断开前把未保存内容存掉。返回：
+   * - saved：已保存（或本来就没有改动）
+   * - paused：自动保存因冲突暂停，交由调用方走现有确认流程
+   * - failed：尝试保存但失败（错误已提示），调用方必须阻止关闭 / 断开
+   * - unavailable：连接或通道不可用，无法自动保存
+   */
+  private async flushEditor(): Promise<'saved' | 'paused' | 'failed' | 'unavailable'> {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const editor = this.editor;
+      if (!editor) return 'saved';
+      if (!editor.isDirty()) return 'saved';
+      if (this.activeEditorSave) {
+        const completed = await this.activeEditorSave.promise;
+        if (!completed) return editor.isAutosavePaused() ? 'paused' : 'failed';
+        continue;
+      }
+      if (editor.isAutosavePaused()) return 'paused';
+      if (!this.ready || !this.isSocketOpen()) return 'unavailable';
+      if (this.hasTransfer()) return 'unavailable';
+      const content = editor.content();
+      const completed = await new Promise<boolean>((resolve) => {
+        if (this.saveEditor(content, undefined, 'manual', resolve) !== 'started') resolve(false);
+      });
+      if (!completed) return editor.isAutosavePaused() ? 'paused' : 'failed';
+    }
+    return this.editor?.isDirty() === false ? 'saved' : 'failed';
+  }
+
+  /**
+   * 断开 / 切换主机前调用：有未保存改动先自动保存。
+   * 自动保存因冲突暂停时沿用一期的确认流程；真正保存失败则阻止断开。
+   */
+  prepareDisconnect(): Promise<boolean> {
+    const editor = this.editor;
+    if (!editor?.isDirty()) return Promise.resolve(true);
+    if (this.conflictPending) return Promise.resolve(false);
+    // 连点断开按钮时复用同一次保存，避免两次 flush 互相抢通道。
+    this.disconnectPreparation ??= this.runPrepareDisconnect().finally(() => {
+      this.disconnectPreparation = null;
+    });
+    return this.disconnectPreparation;
+  }
+
+  private async runPrepareDisconnect(): Promise<boolean> {
+    const result = await this.flushEditor();
+    if (result === 'saved') return true;
+    if (result === 'paused' || result === 'unavailable') return this.confirmEditorLeave();
+    return false;
   }
 
   private async requestCloseEditor(): Promise<void> {
     const editor = this.editor;
     if (!editor) return;
-    if (editor.isDirty()) {
-      const answer = this.confirmAction(this.localize({
-        zh: '编辑器中有未保存的修改，关闭将丢失这些修改。仍要关闭吗？',
-        en: 'The editor has unsaved changes. Close and lose them?',
-      }));
-      const allowed = typeof answer === 'boolean' ? answer : await answer;
-      if (!allowed) return;
+    if (!editor.isDirty()) {
+      this.closeEditor();
+      return;
     }
-    this.closeEditor();
+    const result = await this.flushEditor();
+    if (this.editor !== editor) return;
+    if (result === 'saved') {
+      this.closeEditor();
+      return;
+    }
+    // 保存失败或冲突确认还没结束：错误通道已提示，保持编辑器打开。
+    if (result === 'failed' || (result === 'paused' && this.conflictPending)) return;
+    const answer = this.confirmAction(this.localize({
+      zh: '编辑器中有未保存的修改，关闭将丢失这些修改。仍要关闭吗？',
+      en: 'The editor has unsaved changes. Close and lose them?',
+    }));
+    const allowed = typeof answer === 'boolean' ? answer : await answer;
+    if (allowed) this.closeEditor();
   }
 
   private closeEditor(): void {
     if (!this.editor) return;
+    // 关掉编辑器后迟到的「以远端为准」读取不再有意义，连 pending 一起丢掉，
+    // 否则它的失败会被当成普通错误弹到已经关闭的页面上。
+    if (this.reloadRequest) this.pending.delete(this.reloadRequest.requestId);
+    this.reloadRequest = null;
     this.editor.destroy();
     this.editor = null;
     this.editorDocument = null;
     this.updateControls();
   }
 
-  private async handleEditorConflict(content: string): Promise<void> {
+  /**
+   * mtime 冲突：绝不静默覆盖。自动保存触发的冲突会暂停自动保存；
+   * 选「放弃我的修改」时自动保存场景改为重新读取远端版本（手动保存保留草稿）。
+   */
+  private async handleEditorConflict(content: string, fromAutosave: boolean): Promise<void> {
     const editor = this.editor;
     if (!editor) return;
+    editor.pauseAutosave();
     this.showError(this.localize({
       zh: '远端文件在你打开之后已被修改，已阻止覆盖。',
       en: 'The remote file changed after you opened it; the save was blocked.',
     }));
-    const answer = this.confirmAction(this.localize({
-      zh: '远端文件在你打开之后已被修改。仍要用当前内容覆盖远端版本吗？',
-      en: 'The remote file changed after you opened it. Overwrite it with your current content?',
-    }));
-    const overwrite = typeof answer === 'boolean' ? answer : await answer;
-    if (!overwrite) {
-      editor.markSaveFailed(this.localize({ zh: '保存已取消：远端版本较新。', en: 'Save cancelled: the remote version is newer.' }));
-      return;
+    this.conflictPending = true;
+    let overwrite = false;
+    try {
+      const answer = this.confirmAction(this.localize({
+        zh: '远端文件在你打开之后已被修改。你是要保留自己的版本（覆盖远端），还是放弃修改、以远端为准？',
+        en: 'The remote file changed after you opened it. Keep your version (overwrite the remote), or discard your changes and reload the remote version?',
+      }));
+      overwrite = typeof answer === 'boolean' ? answer : await answer;
+    } finally {
+      this.conflictPending = false;
     }
     if (this.editor !== editor) return;
-    this.saveEditor(content, null);
+    if (overwrite) {
+      this.saveEditor(content, null, fromAutosave ? 'auto' : 'manual');
+      return;
+    }
+    if (!fromAutosave) {
+      // 手动保存取消：保留草稿，自动保存继续暂停（一期行为，避免丢改动）。
+      editor.markSaveFailed(this.localize({ zh: '保存已取消：远端版本较新。', en: 'Save cancelled: the remote version is newer.' }), true);
+      return;
+    }
+    this.reloadEditorContent(editor);
+  }
+
+  /** 冲突后以远端为准：重新 sftp_read_text，成功后替换正文并恢复自动保存。 */
+  private reloadEditorContent(editor: FileEditor): void {
+    const document = this.editorDocument;
+    if (this.editor !== editor || !document) return;
+    if (!this.ready || !this.isSocketOpen() || this.hasTransfer()) {
+      editor.markSaveFailed(this.localize({ zh: '无法读取远端版本：连接或传输不可用。', en: 'Could not read the remote version: the connection or transfer is unavailable.' }));
+      return;
+    }
+    const requestId = this.createRequest('reloadEditor', document.path);
+    this.reloadRequest = { requestId, path: document.path };
+    this.send({ type: 'sftp_read_text', requestId, path: document.path });
+    this.setStatus({ zh: '正在读取远端版本…', en: 'Reading the remote version…' });
+  }
+
+  private handleReloadResult(message: JsonRecord): void {
+    const request = this.reloadRequest;
+    const requestId = typeof message.requestId === 'string' ? message.requestId : '';
+    if (!request || request.requestId !== requestId) return;
+    this.reloadRequest = null;
+    this.pending.delete(requestId);
+    const editor = this.editor;
+    const document = this.editorDocument;
+    if (!editor || !document) return;
+    const content = message.content;
+    const mtime = numberValue(message.mtime);
+    if (typeof content !== 'string' || mtime === null) {
+      const copy = this.localize({ zh: '文件服务返回了无法识别的文本内容。', en: 'The file service returned unreadable text content.' });
+      editor.markSaveFailed(copy);
+      this.showError(copy);
+      return;
+    }
+    editor.applyRemoteContent(content, mtime);
+    document.mtime = mtime;
+    this.elements.error.hidden = true;
+    this.setStatus({ zh: '已按远端版本重新载入', en: 'Reloaded the remote version' });
+    this.updateControls();
   }
 
   private textErrorCopy(message: JsonRecord): string {
@@ -893,6 +1080,10 @@ export class FileManager {
       return;
     }
     if (type === 'sftp_read_text_result') {
+      if (this.reloadRequest && message.requestId === this.reloadRequest.requestId) {
+        this.handleReloadResult(message);
+        return;
+      }
       await this.handleReadTextResult(message);
       return;
     }
@@ -947,10 +1138,47 @@ export class FileManager {
     this.historyIndex = 0;
     this.elements.path.value = cwd;
     this.updateControls();
-    this.requestList(cwd, 'none');
+    void this.restoreRememberedDirectory(cwd);
   }
 
-  private requestList(path: string, historyMode: PendingRequest['historyMode'], historyIndex?: number): string | null {
+  /** 连上后回到该主机上次访问的目录；目录已失效时由 handleServerError 回落 /。 */
+  private async restoreRememberedDirectory(home: string): Promise<void> {
+    const generation = this.generation;
+    const paths = await this.loadPathModule();
+    if (generation !== this.generation || !this.ready) return;
+    let remembered: string | null = null;
+    if (paths && this.hostId) {
+      const record = paths.readRememberedPath(this.pathStorage, this.hostId);
+      if (record) {
+        try {
+          remembered = normalizePath(record.directory);
+        } catch {
+          remembered = null;
+        }
+      }
+    }
+    const restore = remembered !== null && remembered !== home ? remembered : null;
+    this.elements.path.value = restore ?? home;
+    this.requestList(restore ?? home, restore ? 'push' : 'none', undefined, restore !== null);
+  }
+
+  private loadPathModule(): Promise<FilePathsModule | null> {
+    this.pathsLoading ??= import('./file-paths').then(
+      (module) => {
+        this.paths = module;
+        return module;
+      },
+      () => null,
+    );
+    return this.pathsLoading;
+  }
+
+  private requestList(
+    path: string,
+    historyMode: PendingRequest['historyMode'],
+    historyIndex?: number,
+    restorePath = false,
+  ): string | null {
     if (!this.ready || !this.isSocketOpen()) return null;
     let normalized: string;
     try { normalized = normalizePath(path); } catch {
@@ -964,7 +1192,7 @@ export class FileManager {
       this.editorRequest = null;
       this.updateControls();
     }
-    const requestId = this.createRequest('list', normalized, { historyMode, historyIndex });
+    const requestId = this.createRequest('list', normalized, { historyMode, historyIndex, restorePath });
     this.activeListRequest = requestId;
     this.elements.loading.hidden = false;
     this.elements.empty.hidden = true;
@@ -1003,6 +1231,7 @@ export class FileManager {
     });
     this.cwd = path;
     this.emitCwdChange(path);
+    this.rememberDirectory(path);
     if (pending.historyMode === 'push' && this.history[this.historyIndex] !== path) {
       this.history = this.history.slice(0, this.historyIndex + 1);
       this.history.push(path);
@@ -1018,7 +1247,9 @@ export class FileManager {
     this.elements.empty.hidden = entries.length !== 0;
     this.renderEntries();
     const truncated = message.isTruncated === true;
-    this.setStatus({
+    const notice = this.listNotice;
+    this.listNotice = null;
+    this.setStatus(notice ?? {
       zh: `${entries.length} 个项目${truncated ? '（列表已截断）' : ''}`,
       en: `${entries.length} item${entries.length === 1 ? '' : 's'}${truncated ? ' (list truncated)' : ''}`,
     });
@@ -1257,7 +1488,9 @@ export class FileManager {
     if (savingEditor && this.editor && this.editorDocument) {
       if (mtime !== null) this.editorDocument.mtime = mtime;
       this.editor.markSaved(state.editorContent!, mtime);
+      this.rememberEditorFile(state.path);
     }
+    if (savingEditor) this.completeEditorSave(state, true);
     this.setStatus(savingEditor
       ? { zh: `已保存 ${state.source.name}`, en: `Saved ${state.source.name}` }
       : { zh: `已上传 ${state.source.name}`, en: `Uploaded ${state.source.name}` });
@@ -1352,12 +1585,32 @@ export class FileManager {
       this.updateControls();
       return;
     }
+    // 冲突后「以远端为准」的重新读取失败：保留草稿与暂停状态，只报错。
+    if (this.reloadRequest && requestId === this.reloadRequest.requestId) {
+      this.pending.delete(requestId);
+      this.reloadRequest = null;
+      const reason = typeof message.message === 'string' && message.message
+        ? message.message
+        : this.localize({ zh: '无法读取远端版本。', en: 'Could not read the remote version.' });
+      this.editor?.markSaveFailed(reason);
+      this.showError(reason);
+      return;
+    }
     if (requestId && (!pending || pending.generation !== this.generation)) return;
     if (requestId) this.pending.delete(requestId);
     if (pending?.operation === 'list' && requestId !== this.activeListRequest) return;
     if (requestId === this.activeListRequest) {
       this.activeListRequest = null;
       this.elements.loading.hidden = true;
+    }
+    // 恢复上次目录失败：回落到 / 并提示一句，不把用户丢在错误面板里。
+    if (pending?.operation === 'list' && pending.restorePath) {
+      this.listNotice = {
+        zh: '上次访问的目录已不可用，已回到 /。',
+        en: 'The last visited folder is unavailable; returned to /.',
+      };
+      this.requestList('/', 'none');
+      return;
     }
     const fallback = this.localize({ zh: '文件操作失败。', en: 'The file operation failed.' });
     const serverMessage = typeof message.message === 'string' && message.message ? message.message : fallback;
@@ -1368,7 +1621,7 @@ export class FileManager {
     }
     if (upload?.editorContent !== undefined) {
       if (message.conflict === true) {
-        void this.handleEditorConflict(upload.editorContent);
+        void this.handleEditorConflict(upload.editorContent, upload.autoSave === true);
         return;
       }
       this.editor?.markSaveFailed(serverMessage);
@@ -1426,6 +1679,17 @@ export class FileManager {
       entry.reject(error);
     });
     this.treeLists.clear();
+  }
+
+  /** 记录该主机最后成功列出的目录（localStorage 只存主机 id、路径、时间戳）。 */
+  private rememberDirectory(directory: string): void {
+    if (!this.hostId || !this.paths) return;
+    this.paths.writeRememberedPath(this.pathStorage, this.hostId, { directory });
+  }
+
+  private rememberEditorFile(path: string): void {
+    if (!this.hostId || !this.paths) return;
+    this.paths.writeRememberedPath(this.pathStorage, this.hostId, { directory: this.cwd, file: path });
   }
 
   /** Notify all registered cwd-change listeners. Listener errors are swallowed. */
@@ -1512,12 +1776,14 @@ export class FileManager {
 
   private abortTransfers(updateControls: boolean): void {
     // 编辑器保存被中断（断开 / 取消 / 服务端拒绝）时，必须把编辑器从「正在保存」状态里放出来。
-    const interruptedSave = this.uploadState?.editorContent !== undefined;
+    const interrupted = this.uploadState;
+    const interruptedSave = interrupted?.editorContent !== undefined;
     this.uploadState = null;
     this.downloadState = null;
     this.hideProgress();
-    if (interruptedSave) {
+    if (interruptedSave && interrupted) {
       this.editor?.markSaveFailed(this.localize({ zh: '保存未完成，连接或传输已中断。', en: 'The save did not complete: the connection or transfer was interrupted.' }));
+      this.completeEditorSave(interrupted, false);
     }
     if (updateControls) this.updateControls();
   }
@@ -1576,6 +1842,7 @@ export class FileManager {
   }
 
   private showError(message: string): void {
+    this.listNotice = null;
     this.elements.loading.hidden = true;
     this.elements.empty.hidden = true;
     this.elements.error.textContent = message;

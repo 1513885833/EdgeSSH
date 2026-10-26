@@ -26,6 +26,7 @@ import {
   syntaxHighlighting,
 } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
+import { AutosaveController, type AutosavePhase } from './autosave';
 import { editorLanguageFor, isMarkdownFile } from './file-language';
 import './file-editor.css';
 
@@ -47,6 +48,11 @@ interface EditorCopy {
   saving: string;
   previewing: string;
   empty: string;
+  fullscreen: string;
+  exitFullscreen: string;
+  autosavePending: string;
+  autosaveSaving: string;
+  autosavePaused: string;
 }
 
 export interface EditorDocument {
@@ -58,12 +64,17 @@ export interface EditorDocument {
   mode: number;
 }
 
+export type EditorSaveResult = 'started' | 'retry' | 'failed';
+
 export interface FileEditorOptions {
   localize: (copy: LocalizedText) => string;
   /** 关闭请求（按钮 / Esc），由 FileManager 统一做未保存确认。 */
   requestClose: () => void;
-  /** Ctrl/Cmd+S 或「保存」按钮。 */
-  requestSave: (content: string) => void;
+  /**
+   * Ctrl/Cmd+S、「保存」按钮或自动保存到点。`retry` 表示通道被占用、稍后再试；
+   * `failed` 表示这次没启动（FileManager 已经通过 markSaveFailed 给出原因）。
+   */
+  requestSave: (content: string, origin: 'manual' | 'auto') => EditorSaveResult;
 }
 
 const LIGHT_TEXT = '#e9f0f3';
@@ -185,6 +196,11 @@ const COPY: Record<keyof EditorCopy, LocalizedText> = {
   saving: { zh: '正在保存…', en: 'Saving…' },
   previewing: { zh: '预览中', en: 'Preview' },
   empty: { zh: '文件为空', en: 'Empty file' },
+  fullscreen: { zh: '全屏', en: 'Fullscreen' },
+  exitFullscreen: { zh: '还原', en: 'Exit fullscreen' },
+  autosavePending: { zh: '3 秒后自动保存', en: 'Auto-save in 3s' },
+  autosaveSaving: { zh: '自动保存中…', en: 'Auto-saving…' },
+  autosavePaused: { zh: '自动保存已暂停 · 远端已变更', en: 'Auto-save paused · remote changed' },
 };
 
 export class FileEditor {
@@ -200,8 +216,10 @@ export class FileEditor {
   private readonly title: HTMLElement;
   private readonly pathLabel: HTMLElement;
   private readonly stateLabel: HTMLElement;
+  private readonly autosaveLabel: HTMLElement;
   private readonly saveButton: HTMLButtonElement;
   private readonly previewButton: HTMLButtonElement;
+  private readonly fullscreenButton: HTMLButtonElement;
   private readonly closeButton: HTMLButtonElement;
   private readonly host: HTMLElement;
   private readonly preview: HTMLElement;
@@ -211,6 +229,13 @@ export class FileEditor {
   private saving = false;
   private previewing = false;
   private disposed = false;
+  /** 全屏只是同一个容器的 class 切换，绝不重建 CodeMirror（保住 undo 栈与光标）。 */
+  private fullscreen = false;
+  /** 自动保存状态机随编辑器一起按需加载，不进入首屏 chunk。 */
+  private readonly autosave: AutosaveController;
+  private autosavePhase: AutosavePhase = 'idle';
+  /** 载入远端版本时抑制自动保存计时，否则会立刻把刚读到的内容再存回去。 */
+  private applyingRemote = false;
   /** 一次性状态：'saved' 或保存失败消息；内容变化后清空。 */
   private statusOverride: { saved: true } | { error: string } | null = null;
 
@@ -219,6 +244,13 @@ export class FileEditor {
     this.file = file;
     this.savedContent = file.content;
     this.markdown = isMarkdownFile(file.name);
+    this.autosave = new AutosaveController({
+      save: () => this.runAutoSave(),
+      onPhaseChange: (phase) => {
+        this.autosavePhase = phase;
+        this.renderAutosave();
+      },
+    });
     this.element = document.createElement('div');
     this.element.className = 'file-editor';
     this.element.setAttribute('role', 'dialog');
@@ -231,8 +263,10 @@ export class FileEditor {
           <span class="file-editor-path"></span>
         </div>
         <div class="file-editor-actions">
+          <span class="file-editor-autosave" role="status" aria-live="polite" data-state="idle" hidden></span>
           <span class="file-editor-state" role="status" aria-live="polite"></span>
           <button class="file-editor-button" type="button" data-action="preview" hidden></button>
+          <button class="file-editor-button" type="button" data-action="fullscreen" aria-pressed="false"></button>
           <button class="file-editor-button primary" type="button" data-action="save"></button>
           <button class="file-editor-button icon" type="button" data-action="close"></button>
         </div>
@@ -244,8 +278,10 @@ export class FileEditor {
     this.title = this.element.querySelector('.file-editor-title')!;
     this.pathLabel = this.element.querySelector('.file-editor-path')!;
     this.stateLabel = this.element.querySelector('.file-editor-state')!;
+    this.autosaveLabel = this.element.querySelector('.file-editor-autosave')!;
     this.saveButton = this.element.querySelector('[data-action="save"]')!;
     this.previewButton = this.element.querySelector('[data-action="preview"]')!;
+    this.fullscreenButton = this.element.querySelector('[data-action="fullscreen"]')!;
     this.closeButton = this.element.querySelector('[data-action="close"]')!;
     this.host = this.element.querySelector('.file-editor-host')!;
     this.preview = this.element.querySelector('.file-editor-preview')!;
@@ -255,6 +291,7 @@ export class FileEditor {
     this.element.setAttribute('aria-labelledby', this.title.id);
     this.previewButton.hidden = !this.markdown;
     this.previewButton.addEventListener('click', () => void this.togglePreview());
+    this.fullscreenButton.addEventListener('click', () => this.toggleFullscreen());
     this.saveButton.addEventListener('click', () => this.requestSave());
     this.closeButton.addEventListener('click', () => this.options.requestClose());
     this.element.addEventListener('keydown', (event) => this.handleKeydown(event), true);
@@ -290,8 +327,10 @@ export class FileEditor {
       ]),
       theme,
       EditorView.updateListener.of((update) => {
-        if (!update.docChanged) return;
+        if (!update.docChanged || this.applyingRemote) return;
         this.statusOverride = null;
+        // 停止输入 3 秒后自动保存；保存期间的输入由状态机合并。
+        this.autosave.schedule();
         this.renderState();
       }),
     ];
@@ -320,6 +359,10 @@ export class FileEditor {
     return this.view?.state.doc.toString() ?? this.file.content;
   }
 
+  isSaving(): boolean {
+    return this.saving;
+  }
+
   focus(): void {
     this.view?.focus();
   }
@@ -327,6 +370,7 @@ export class FileEditor {
   markSaving(): void {
     this.saving = true;
     this.statusOverride = null;
+    this.autosave.beginSaving();
     this.renderState();
   }
 
@@ -334,13 +378,65 @@ export class FileEditor {
     this.saving = false;
     this.savedContent = content;
     if (mtime !== null) this.file.mtime = mtime;
-    this.statusOverride = { saved: true };
+    // 保存期间又有输入时不能显示「已保存」，等合并的那次保存完成。
+    this.statusOverride = this.isDirty() ? null : { saved: true };
+    // 成功即恢复自动保存（含强制覆盖后解除暂停）；有合并输入会再排一次。
+    this.autosave.succeed();
     this.renderState();
   }
 
-  markSaveFailed(message: string): void {
+  setFullscreen(fullscreen: boolean): void {
+    if (this.disposed || this.fullscreen === fullscreen) return;
+    this.fullscreen = fullscreen;
+    this.element.classList.toggle('is-fullscreen', fullscreen);
+    this.setLanguage();
+    this.view?.requestMeasure();
+    this.focus();
+  }
+
+  toggleFullscreen(): void {
+    this.setFullscreen(!this.fullscreen);
+  }
+
+  /**
+   * 保存失败。默认停止自动保存；冲突场景由 `keepPaused` 保住暂停态，
+   * 直到用户强制覆盖成功或重新载入远端版本。
+   */
+  markSaveFailed(message: string, keepPaused = false): void {
     this.saving = false;
     this.statusOverride = { error: message };
+    if (keepPaused) this.autosave.pause();
+    else this.autosave.fail(false);
+    this.renderState();
+  }
+
+  /** 远端 mtime 冲突：暂停自动保存，绝不静默覆盖。 */
+  pauseAutosave(): void {
+    this.autosave.pause();
+  }
+
+  isAutosavePaused(): boolean {
+    return this.autosave.current === 'paused';
+  }
+
+  cancelAutosave(): void {
+    this.autosave.cancel();
+  }
+
+  /** 冲突后「以远端为准」：整篇换成远端内容，并把它作为新的保存基准。 */
+  applyRemoteContent(content: string, mtime: number): void {
+    if (this.disposed || !this.view) return;
+    this.applyingRemote = true;
+    try {
+      this.view.dispatch({ changes: { from: 0, to: this.view.state.doc.length, insert: content } });
+    } finally {
+      this.applyingRemote = false;
+    }
+    this.savedContent = content;
+    this.file.mtime = mtime;
+    this.saving = false;
+    this.statusOverride = null;
+    this.autosave.cancel();
     this.renderState();
   }
 
@@ -350,16 +446,23 @@ export class FileEditor {
     this.saveButton.title = copy.saveShortcut;
     this.saveButton.setAttribute('aria-label', copy.saveShortcut);
     this.previewButton.textContent = this.previewing ? copy.source : copy.preview;
+    const fullscreenLabel = this.fullscreen ? copy.exitFullscreen : copy.fullscreen;
+    this.fullscreenButton.textContent = fullscreenLabel;
+    this.fullscreenButton.title = fullscreenLabel;
+    this.fullscreenButton.setAttribute('aria-label', fullscreenLabel);
+    this.fullscreenButton.setAttribute('aria-pressed', String(this.fullscreen));
     this.closeButton.textContent = '✕';
     this.closeButton.setAttribute('aria-label', copy.close);
     this.closeButton.title = copy.close;
     this.element.setAttribute('aria-label', copy.dialog);
+    this.renderAutosave();
     this.renderState();
   }
 
   destroy(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.autosave.cancel();
     this.view?.destroy();
     this.view = null;
     this.element.remove();
@@ -379,7 +482,7 @@ export class FileEditor {
     const dirty = this.isDirty();
     this.element.classList.toggle('is-dirty', dirty);
     if (this.saving) this.stateLabel.textContent = copy.saving;
-    else if (this.statusOverride && 'saved' in this.statusOverride) this.stateLabel.textContent = copy.saved;
+    else if (this.statusOverride && 'saved' in this.statusOverride) this.stateLabel.textContent = dirty ? copy.dirty : copy.saved;
     else if (this.statusOverride) this.stateLabel.textContent = this.statusOverride.error;
     else if (this.previewing) this.stateLabel.textContent = copy.previewing;
     else if (dirty) this.stateLabel.textContent = copy.dirty;
@@ -389,10 +492,43 @@ export class FileEditor {
     this.previewButton.textContent = this.previewing ? copy.source : copy.preview;
   }
 
+  private renderAutosave(): void {
+    const phase = this.autosavePhase;
+    this.element.dataset.autosave = phase;
+    this.autosaveLabel.dataset.state = phase;
+    this.autosaveLabel.hidden = phase === 'idle';
+    if (phase === 'idle') {
+      this.autosaveLabel.textContent = '';
+      return;
+    }
+    const copy = this.copy();
+    this.autosaveLabel.textContent = phase === 'paused'
+      ? copy.autosavePaused
+      : phase === 'saving' ? copy.autosaveSaving : copy.autosavePending;
+  }
+
   private requestSave(): void {
     if (this.disposed || this.saving || !this.view) return;
     if (!this.isDirty()) return;
-    this.options.requestSave(this.content());
+    this.options.requestSave(this.content(), 'manual');
+  }
+
+  /** 防抖到点：内容没变就回到 idle，通道忙则稍后重试。 */
+  private runAutoSave(): void {
+    if (this.disposed || !this.view) {
+      this.autosave.cancel();
+      return;
+    }
+    if (!this.isDirty()) {
+      this.autosave.succeed();
+      return;
+    }
+    if (this.saving) {
+      this.autosave.defer();
+      return;
+    }
+    const result = this.options.requestSave(this.content(), 'auto');
+    if (result === 'retry') this.autosave.defer();
   }
 
   private async togglePreview(): Promise<void> {
@@ -444,16 +580,29 @@ export class FileEditor {
   }
 
   private handleKeydown(event: KeyboardEvent): void {
+    const mod = event.ctrlKey || event.metaKey;
     // 预览模式下 CodeMirror 不在焦点上，快捷键要在覆盖层统一拦截。
-    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 's') {
+    if (mod && !event.altKey && event.key.toLowerCase() === 's') {
       event.preventDefault();
       this.requestSave();
+      return;
+    }
+    if (mod && !event.altKey && event.shiftKey && event.key.toLowerCase() === 'f') {
+      event.preventDefault();
+      event.stopPropagation();
+      this.toggleFullscreen();
       return;
     }
     if (event.key !== 'Escape') return;
     // 搜索面板打开时优先让 CodeMirror 自己关闭它。
     if (this.element.querySelector('.cm-panel.cm-search')) return;
     event.preventDefault();
+    // 全屏时第一次 Esc 只退出全屏，第二次才走关闭确认。
+    if (this.fullscreen) {
+      event.stopPropagation();
+      this.setFullscreen(false);
+      return;
+    }
     this.options.requestClose();
   }
 }
