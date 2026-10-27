@@ -4,16 +4,15 @@
 
 ## 安装与登录
 
-先部署本次代码更新，再在 EdgeSSH 源码根目录执行：
+服务端须先部署包含 CLI 协议的版本（当前为 [PR #10](https://github.com/aozorae/EdgeSSH/pull/10)），再在本机执行：
 
 ```sh
-npm --prefix cli ci
-npm install --global ./cli
+npm install --global @aozorae/edgessh
 edgessh login --url https://ssh.example.com
 edgessh hosts
 ```
 
-也可以不全局安装，直接用 `node cli/bin.mjs` 替代 `edgessh`。CLI 尚未发布到 npm，以上从源码安装。
+不全局安装时，用 `npx --yes @aozorae/edgessh <命令>` 替代 `edgessh <命令>`。源码开发仍可在仓库根目录执行 `npm --prefix cli ci` 后用 `node cli/bin.mjs`，或执行 `npm install --global ./cli` 从本地安装。
 
 `login` 调用 `cloudflared access login`，自动打开系统浏览器。用户完成原来的 Access 登录后，cloudflared 安全接收并缓存应用令牌。后续命令通过 `cloudflared access token` 获取缓存令牌，同时携带同源 `Origin`、Access header/cookie 访问现有接口。令牌不会输出到 CLI 的标准输出，也不会复制到 CLI 配置。
 
