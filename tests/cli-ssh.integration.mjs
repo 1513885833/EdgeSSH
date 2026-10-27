@@ -104,8 +104,9 @@ test('CLI against real SSH: command results, SFTP, trust, limits and cleanup', {
       result = await cli('get', 'fixture', remote, destination); assert.equal(result.code, 1); assert.deepEqual(await readFile(destination), content);
       result = await cli('put', 'fixture', source, remote); assert.equal(result.code, 1);
       await writeFile(source, 'replacement');
-      result = await cli('put', 'fixture', source, remote, '--force'); assert.equal(result.code, 0, result.stderr);
-      result = await cli('get', 'fixture', remote, destination, '--force'); assert.equal(result.code, 0, result.stderr); assert.equal(await readFile(destination, 'utf8'), 'replacement');
+      // ssh2 测试服务不公告原子覆盖扩展，拒绝后必须保留原文件。
+      result = await cli('put', 'fixture', source, remote, '--force'); assert.equal(result.code, 1); assert.match(result.stderr, /atomic overwrite/);
+      result = await cli('get', 'fixture', remote, destination, '--force'); assert.equal(result.code, 0, result.stderr); assert.deepEqual(await readFile(destination), content);
       const moved = join(remoteDir, 'moved');
       result = await cli('mv', 'fixture', remote, moved); assert.equal(result.code, 0, result.stderr);
       result = await cli('rm', 'fixture', moved); assert.equal(result.code, 0, result.stderr);

@@ -1,4 +1,6 @@
 import WebSocket from 'ws';
+import http from 'node:http';
+import https from 'node:https';
 
 export class Channel {
   constructor(ws, signal) {
@@ -91,8 +93,10 @@ export class Client {
   async open(path) {
     const url = new URL(path, this.origin);
     if (url.origin !== this.origin || !['/api/ssh', '/api/sftp'].includes(url.pathname)) throw new Error('Invalid WebSocket attachment URL');
+    // ws 自带 createConnection；显式使用全局 Agent，才能沿用 Node 配置的环境代理。
+    const agent = url.protocol === 'https:' ? https.globalAgent : http.globalAgent;
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(url, { headers: this.headers, followRedirects: false, handshakeTimeout: 15_000, maxPayload: 4 * 1024 * 1024 });
+    const ws = new WebSocket(url, { agent, headers: this.headers, followRedirects: false, handshakeTimeout: 15_000, maxPayload: 4 * 1024 * 1024 });
     const channel = new Channel(ws, this.signal);
     this.channels.push(channel);
     await new Promise((resolve, reject) => {

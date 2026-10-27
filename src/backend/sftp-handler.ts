@@ -238,7 +238,7 @@ export class SFTPHandler {
       if (upload.received !== upload.size) throw new Error('Upload ended before the declared size was received');
       await this.client.closeHandle(upload.handle);
       upload.handleClosed = true;
-      if (upload.temporary) await this.client.rename(upload.uploadPath, upload.destinationPath);
+      if (upload.temporary) await this.client.rename(upload.uploadPath, upload.destinationPath, true);
       this.upload = null;
       this.sendJSON({ type: 'sftp_upload_complete', requestId, path: upload.destinationPath, size: upload.received });
     } catch (error) {

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createServer } from 'node:http';
+import http, { createServer } from 'node:http';
+import https from 'node:https';
+import { WebSocketServer } from 'ws';
 import { once } from 'node:events';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -43,6 +45,42 @@ test('Access credentials and Origin are attached to JSON requests', async () => 
     assert.deepEqual(await client.request('/api/session', {}), { ticket: 'fixture' });
     await assert.rejects(client.open('https://evil.example.com/api/sftp'), /Invalid WebSocket/);
   });
+});
+for (const [protocol, agent] of [['http', http.globalAgent], ['https', https.globalAgent]]) {
+  test(`${protocol} WebSocket uses the configured global Agent`, async () => {
+    const original = agent.addRequest;
+    let used = false;
+    const client = new Client(`${protocol}://127.0.0.1:1`, 'test.token.signature', new AbortController().signal);
+    agent.addRequest = function (request) {
+      used = true;
+      queueMicrotask(() => { request.emit('error', new Error('fixture Agent')); request.destroy(); });
+    };
+    try {
+      await assert.rejects(client.open('/api/ssh'), /WebSocket transport failed/);
+      assert.equal(used, true);
+    } finally { agent.addRequest = original; client.close(); }
+  });
+}
+test('WebSocket upgrade preserves Access headers and exchanges messages', async () => {
+  const listener = createServer();
+  const wss = new WebSocketServer({ server: listener });
+  listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
+  const client = new Client(`http://127.0.0.1:${listener.address().port}`, 'test.token.signature', new AbortController().signal);
+  wss.on('connection', (socket, request) => {
+    assert.equal(request.headers.cookie, 'CF_Authorization=test.token.signature');
+    assert.equal(request.headers['cf-access-token'], 'test.token.signature');
+    assert.equal(request.headers.origin, client.origin);
+    socket.send(JSON.stringify({ type: 'ready' }));
+  });
+  try {
+    const channel = await client.open('/api/ssh');
+    assert.deepEqual(await channel.next(), { type: 'ready' });
+  } finally {
+    client.close();
+    for (const socket of wss.clients) socket.terminate();
+    await new Promise(resolve => wss.close(resolve));
+    await new Promise(resolve => listener.close(resolve));
+  }
 });
 test('login invokes cloudflared, saves only origin, and never prints the token', { skip: process.platform === 'win32' }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'edgessh-login-'));

@@ -21,6 +21,8 @@ edgessh hosts
 
 令牌到期时命令直接报错，用户重新执行 `edgessh login`。Agent 调用普通命令不会自动弹浏览器、重试登录或重复执行远端命令。
 
+需要 HTTP(S) 环境代理时，使用 Node.js 24.5+，设置 `HTTPS_PROXY`（以及按需设置 `HTTP_PROXY`、`NO_PROXY`），再启用 `NODE_USE_ENV_PROXY=1`。也可从源码运行 `node --use-env-proxy cli/bin.mjs <命令>`；HTTP 和 WebSocket 均沿用 Node 全局代理，不会自行改变系统网络配置。只使用可信代理。
+
 ## 常用命令
 
 主机参数可以是完整 ID 或唯一的主机名；重名时必须使用 ID。
@@ -82,6 +84,8 @@ CLI 配置默认位于 `$XDG_CONFIG_HOME/edgessh/config.json`，未设置时为 
 - `exec` 默认最长 60 秒；文件和交互连接默认最长 600 秒。`--timeout 1..600` 可调整。服务端同样执行会话期限，客户端强制退出或断网时也有最长存活边界。SSH 的握手、加密、传输依然消耗 Workers/DO 资源；大文件、密集命令和长期交互不会免费。
 - CLI 默认最多接收 1 MiB 命令输出，`--max-output` 可调整到 16 MiB；服务端另有 16 MiB 硬上限。超限会报错并断开，不把截断结果标成成功。Agent 应优先用 `tail`、`head` 等缩小输出。
 - 文件沿用现有单文件 64 MiB 限制，流式处理、上传逐块确认。下载成功后才原子落到目标路径，失败删除 `.part` 临时文件。上传下载默认拒绝覆盖，显式 `--force` 才允许。
+
+上传覆盖要求服务器支持 `posix-rename@openssh.com` v1（OpenSSH 支持）。不支持时会报错并清理上传临时文件，保留原目标，不会先删除原文件。
 
 这些上限限制 EdgeSSH 连接的存活时间，不保证终止远端通过 `nohup`、`systemd` 或其他方式脱离 SSH 的进程。此类远端任务由用户通过后续命令管理。
 
