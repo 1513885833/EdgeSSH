@@ -77,7 +77,7 @@ function setup() {
   return { client, messages, binary, handler };
 }
 
-test('sftp_read_text 返回正文、大小、mtime 与权限位', async () => {
+test('sftp_read_text 返回正文、大小与 mtime', async () => {
   const { client, messages, handler } = setup();
   await handler.readText('r1', '/root/app.ts');
   assert.equal(messages.length, 1);
@@ -88,7 +88,6 @@ test('sftp_read_text 返回正文、大小、mtime 与权限位', async () => {
   assert.equal(message.content, 'hello world\n');
   assert.equal(message.size, 12);
   assert.equal(message.mtime, 1000);
-  assert.equal(message.mode, 0o100644);
   assert.equal(client.opened[0].flags, SFTP_OPEN_FLAGS.READ);
 });
 

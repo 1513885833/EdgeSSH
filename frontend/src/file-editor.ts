@@ -61,7 +61,6 @@ export interface EditorDocument {
   content: string;
   /** 打开时的远端修改时间（秒级），保存时作为冲突校验基准。 */
   mtime: number;
-  mode: number;
 }
 
 export type EditorSaveResult = 'started' | 'retry' | 'failed';
@@ -79,6 +78,14 @@ export interface FileEditorOptions {
 
 const LIGHT_TEXT = '#e9f0f3';
 const ACCENT = '#69e6b4';
+
+/**
+ * 只在文本真的变化时写 DOM。状态标签是 `aria-live` 区域，每敲一个字都重写
+ * 会让读屏软件把整句重新播报一遍。
+ */
+function setLiveText(node: HTMLElement, text: string): void {
+  if (node.textContent !== text) node.textContent = text;
+}
 
 const theme = EditorView.theme({
   '&': {
@@ -238,12 +245,15 @@ export class FileEditor {
   private applyingRemote = false;
   /** 一次性状态：'saved' 或保存失败消息；内容变化后清空。 */
   private statusOverride: { saved: true } | { error: string } | null = null;
+  /** 打开编辑器前的焦点元素；关闭后还给它（对话框不是新页面）。 */
+  private readonly returnFocus: HTMLElement | null;
 
   private constructor(options: FileEditorOptions, file: EditorDocument) {
     this.options = options;
     this.file = file;
     this.savedContent = file.content;
     this.markdown = isMarkdownFile(file.name);
+    this.returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.autosave = new AutosaveController({
       save: () => this.runAutoSave(),
       onPhaseChange: (phase) => {
@@ -294,7 +304,9 @@ export class FileEditor {
     this.fullscreenButton.addEventListener('click', () => this.toggleFullscreen());
     this.saveButton.addEventListener('click', () => this.requestSave());
     this.closeButton.addEventListener('click', () => this.options.requestClose());
-    this.element.addEventListener('keydown', (event) => this.handleKeydown(event), true);
+    // 冒泡阶段监听：让 CodeMirror 先处理它自己的按键（搜索面板的 Esc、Tab 缩进），
+    // 我们再决定要不要继续冒泡到 document。
+    this.element.addEventListener('keydown', (event) => this.handleKeydown(event));
     this.setLanguage();
   }
 
@@ -466,6 +478,18 @@ export class FileEditor {
     this.view?.destroy();
     this.view = null;
     this.element.remove();
+    this.restoreFocus();
+  }
+
+  /** 把焦点还给打开编辑器前的元素；它已被移除 / 禁用 / 锁在 inert 里时放弃。 */
+  private restoreFocus(): void {
+    const target = this.returnFocus;
+    if (!target || !target.isConnected || target.closest('[inert]')) return;
+    if ('disabled' in target && (target as { disabled: boolean }).disabled) return;
+    // 用户已经把焦点移到别处（例如点了别的控件）时不抢回来。
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    target.focus();
   }
 
   private copy(): EditorCopy {
@@ -481,12 +505,12 @@ export class FileEditor {
     const copy = this.copy();
     const dirty = this.isDirty();
     this.element.classList.toggle('is-dirty', dirty);
-    if (this.saving) this.stateLabel.textContent = copy.saving;
-    else if (this.statusOverride && 'saved' in this.statusOverride) this.stateLabel.textContent = dirty ? copy.dirty : copy.saved;
-    else if (this.statusOverride) this.stateLabel.textContent = this.statusOverride.error;
-    else if (this.previewing) this.stateLabel.textContent = copy.previewing;
-    else if (dirty) this.stateLabel.textContent = copy.dirty;
-    else this.stateLabel.textContent = copy.clean;
+    if (this.saving) setLiveText(this.stateLabel, copy.saving);
+    else if (this.statusOverride && 'saved' in this.statusOverride) setLiveText(this.stateLabel, dirty ? copy.dirty : copy.saved);
+    else if (this.statusOverride) setLiveText(this.stateLabel, this.statusOverride.error);
+    else if (this.previewing) setLiveText(this.stateLabel, copy.previewing);
+    else if (dirty) setLiveText(this.stateLabel, copy.dirty);
+    else setLiveText(this.stateLabel, copy.clean);
     this.saveButton.disabled = this.saving || !dirty;
     this.saveButton.textContent = copy.save;
     this.previewButton.textContent = this.previewing ? copy.source : copy.preview;
@@ -498,13 +522,13 @@ export class FileEditor {
     this.autosaveLabel.dataset.state = phase;
     this.autosaveLabel.hidden = phase === 'idle';
     if (phase === 'idle') {
-      this.autosaveLabel.textContent = '';
+      setLiveText(this.autosaveLabel, '');
       return;
     }
     const copy = this.copy();
-    this.autosaveLabel.textContent = phase === 'paused'
+    setLiveText(this.autosaveLabel, phase === 'paused'
       ? copy.autosavePaused
-      : phase === 'saving' ? copy.autosaveSaving : copy.autosavePending;
+      : phase === 'saving' ? copy.autosaveSaving : copy.autosavePending);
   }
 
   private requestSave(): void {
@@ -544,6 +568,9 @@ export class FileEditor {
     this.previewing = true;
     this.host.hidden = true;
     this.preview.hidden = false;
+    // 预览层本身可聚焦：否则点完预览焦点掉到 body，挂在容器上的 Esc / Ctrl+S 收不到。
+    this.preview.tabIndex = 0;
+    this.preview.focus();
     this.setLanguage();
     this.preview.textContent = this.options.localize({ zh: '正在渲染预览…', en: 'Rendering preview…' });
     try {
@@ -580,6 +607,12 @@ export class FileEditor {
   }
 
   private handleKeydown(event: KeyboardEvent): void {
+    // CodeMirror 已经消费的按键（搜索面板的 Esc、Tab 缩进等）：这里只阻断冒泡。
+    // 否则 Esc 会继续冒到 document 上的处理器，把连接面板一起收起（并设为 inert）。
+    if (event.defaultPrevented) {
+      if (event.key === 'Escape') event.stopPropagation();
+      return;
+    }
     const mod = event.ctrlKey || event.metaKey;
     // 预览模式下 CodeMirror 不在焦点上，快捷键要在覆盖层统一拦截。
     if (mod && !event.altKey && event.key.toLowerCase() === 's') {
@@ -593,16 +626,49 @@ export class FileEditor {
       this.toggleFullscreen();
       return;
     }
+    if (event.key === 'Tab') {
+      this.trapTab(event);
+      return;
+    }
     if (event.key !== 'Escape') return;
-    // 搜索面板打开时优先让 CodeMirror 自己关闭它。
-    if (this.element.querySelector('.cm-panel.cm-search')) return;
+    // 搜索面板还开着：让 CodeMirror 独占 Esc，别让 document 把连接面板关掉。
+    if (this.element.querySelector('.cm-panel.cm-search')) {
+      event.stopPropagation();
+      return;
+    }
     event.preventDefault();
+    event.stopPropagation();
     // 全屏时第一次 Esc 只退出全屏，第二次才走关闭确认。
     if (this.fullscreen) {
-      event.stopPropagation();
       this.setFullscreen(false);
       return;
     }
     this.options.requestClose();
+  }
+
+  /** 对话框内 Tab 首尾回绕；CodeMirror 自己的 Tab 缩进已被它先消费，不受影响。 */
+  private trapTab(event: KeyboardEvent): void {
+    const focusable = this.focusableElements();
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    const outside = !this.element.contains(active);
+    if (event.shiftKey && (outside || active === first)) {
+      event.preventDefault();
+      last.focus();
+      return;
+    }
+    if (!event.shiftKey && (outside || active === last)) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  /** 当前可见、可聚焦的后代元素，按 DOM 顺序。 */
+  private focusableElements(): HTMLElement[] {
+    const selector = 'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
+    return [...this.element.querySelectorAll<HTMLElement>(selector)]
+      .filter((node) => node.getClientRects().length > 0);
   }
 }

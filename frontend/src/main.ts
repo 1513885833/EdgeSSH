@@ -2289,7 +2289,14 @@ ui.resourceNetworkSelect.addEventListener('change', () => {
 });
 terminal.onData((data) => terminalTools?.handleTerminalData(data));
 new ResizeObserver(() => fitTerminal(true)).observe(ui.terminalStage);
-window.addEventListener('beforeunload', () => {
+window.addEventListener('beforeunload', (event) => {
+  // 3 秒防抖窗口里的输入还在编辑器内存中，卸载时同步保存不可行：交给浏览器原生提示。
+  if (fileManager.hasUnsavedEditorChanges()) {
+    event.preventDefault();
+    event.returnValue = '';
+    // 用户可能选择留在本页；此时不能 reset，否则编辑器被销毁、改动照样丢。
+    return;
+  }
   fileManager.reset();
   fileTree?.setReady(false);
   fileTree?.destroy();

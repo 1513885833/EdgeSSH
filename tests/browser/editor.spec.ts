@@ -275,3 +275,89 @@ test('自动保存冲突：强制覆盖成功后自动保存恢复', async ({ pa
   expect(starts[2].expectedMtime).toBe(READ_MTIME + 61);
   expect(fixture.textFiles.get('/root/README.md')!.content).toBe('second autosave');
 });
+
+test('预览态下 Ctrl/Cmd+S 仍然保存', async ({ page }) => {
+  const fixture = await fileFixture(page);
+  await connectFiles(page);
+  await page.locator('.files-list').getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
+  const editor = page.locator('.file-editor');
+  const content = editor.locator('.cm-content');
+  await expect(editor).toBeVisible();
+
+  await content.click();
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.insertText('# Saved from preview\n');
+  await editor.locator('[data-action="preview"]').click();
+  const preview = editor.locator('.file-editor-preview');
+  await expect(preview).toBeVisible();
+  await expect(preview.locator('h1')).toHaveText('Saved from preview');
+  // 预览层自己拿着焦点（CodeMirror 被 hidden），快捷键仍由编辑器容器拦下。
+  await expect(preview).toBeFocused();
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(editor.locator('.file-editor-state')).toHaveText('已保存');
+
+  const starts = fixture.calls.filter((call) => call.type === 'sftp_upload_start');
+  expect(starts).toHaveLength(1);
+  expect(starts[0]).toMatchObject({ path: '/root/README.md', expectedMtime: READ_MTIME });
+  expect(fixture.textFiles.get('/root/README.md')!.content).toBe('# Saved from preview\n');
+});
+
+test('保存成功但没有 mtime：下次保存不带 expectedMtime', async ({ page }) => {
+  const fixture = await fileFixture(page, { omitUploadMtime: true });
+  await connectFiles(page);
+  await page.locator('.files-list').getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
+  const editor = page.locator('.file-editor');
+  const content = editor.locator('.cm-content');
+  await expect(editor).toBeVisible();
+
+  await content.click();
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.insertText('first save\n');
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(editor.locator('.file-editor-state')).toHaveText('已保存');
+
+  // 后端 stat 失败时基线必须转为「未知」，否则第二次保存会拿打开时的旧 mtime
+  // 去比对新 mtime，把自己刚写的内容误报成「远端已变更」。
+  await content.click();
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.insertText('second save\n');
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect(editor.locator('.file-editor-state')).toHaveText('已保存');
+
+  const starts = fixture.calls.filter((call) => call.type === 'sftp_upload_start');
+  expect(starts.map((call) => call.expectedMtime)).toEqual([READ_MTIME, undefined]);
+  expect(fixture.textFiles.get('/root/README.md')!.content).toBe('second save\n');
+});
+
+test('非全屏 Esc 关闭编辑器，连接面板不被连带关掉', async ({ page }) => {
+  const fixture = await fileFixture(page);
+  await connectFiles(page);
+  // 在工作台里打开文件 dock 与编辑器。
+  await page.locator('#files-terminal').click();
+  await page.locator('#file-manager-tab').click();
+  await page.locator('#file-table-body tr').filter({ hasText: 'README.md' }).dblclick();
+  const editor = page.locator('.file-editor');
+  await expect(editor).toBeVisible();
+
+  // 展开连接面板：此时 panelOpen 为 true，document 上的 Esc 处理器才会动作。
+  await page.locator('#panel-toggle').click();
+  const panel = page.locator('#connection-panel');
+  await expect(panel).toHaveClass(/open/);
+  await expect(panel).toHaveAttribute('aria-hidden', 'false');
+
+  // 面板展开后指针被 scrim 挡住：模拟键盘用户把焦点放回编辑器再按 Esc。
+  await page.evaluate(() => document.querySelector<HTMLElement>('.file-editor .cm-content')?.focus());
+  await page.keyboard.press('Escape');
+  await expect(editor).toHaveCount(0);
+
+  // 关键回归：Esc 只关编辑器，不会冒泡到 document 连带收起连接面板或把它设成 inert。
+  await expect(panel).toHaveClass(/open/);
+  await expect(panel).toHaveAttribute('aria-hidden', 'false');
+  expect(await panel.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
+  await expect(page.locator('#panel-toggle')).toHaveAttribute('aria-expanded', 'true');
+
+  // 面板仍然可用：再按一次 Esc，它照常收起。
+  await page.keyboard.press('Escape');
+  await expect(panel).not.toHaveClass(/open/);
+  expect(fixture.textFiles.get('/root/README.md')!.content).toContain('<script>');
+});

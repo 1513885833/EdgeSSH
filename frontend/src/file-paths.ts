@@ -1,5 +1,5 @@
 /**
- * 按主机记住最后访问的目录与文件路径（localStorage）。
+ * 按主机记住最后访问的目录（localStorage）。
  *
  * 存储里只有主机 id（编码在键名里）、远端路径和时间戳，绝不保存凭据或文件正文。
  * 这里全部是纯函数，便于 node 单测直接覆盖；localStorage 不可用时静默降级。
@@ -16,8 +16,6 @@ export interface StorageLike {
 export interface RememberedPath {
   /** 该主机最后一次成功列出的目录。 */
   directory: string;
-  /** 该主机最后一次在编辑器里打开的远端文件。 */
-  file: string | null;
   /** 写入时间（毫秒时间戳），仅用于排查，不参与恢复逻辑。 */
   updatedAt: number;
 }
@@ -47,11 +45,11 @@ function parseRecord(raw: unknown): RememberedPath | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const record = raw as Record<string, unknown>;
   if (!isAbsoluteRemotePath(record.directory)) return null;
-  const file = isAbsoluteRemotePath(record.file) ? record.file : null;
   const updatedAt = typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt) && record.updatedAt >= 0
     ? record.updatedAt
     : 0;
-  return { directory: record.directory, file, updatedAt };
+  // 早期版本还存过 `file` 字段；现在只认目录，旧记录里的多余字段直接忽略。
+  return { directory: record.directory, updatedAt };
 }
 
 export function readRememberedPath(
@@ -77,23 +75,18 @@ export function readRememberedPath(
 }
 
 /**
- * 合并写入：只传目录或只传文件时保留另一个字段。`file: null` 表示清除记录的文件。
- * 返回实际写入的记录；校验失败或存储不可用时返回 null。
+ * 写入该主机最后访问的目录。返回实际写入的记录；校验失败或存储不可用时返回 null。
  */
 export function writeRememberedPath(
-  storage: Pick<StorageLike, 'getItem' | 'setItem'> | null,
+  storage: Pick<StorageLike, 'setItem'> | null,
   hostId: string,
-  patch: { directory?: string; file?: string | null },
+  directory: string,
   now: number = Date.now(),
 ): RememberedPath | null {
   const key = filePathStorageKey(hostId);
   if (!key || !storage) return null;
-  const previous = readRememberedPath(storage, hostId);
-  const directory = patch.directory !== undefined ? patch.directory : previous?.directory;
   if (!isAbsoluteRemotePath(directory)) return null;
-  let file: string | null = patch.file !== undefined ? patch.file : previous?.file ?? null;
-  if (file !== null && !isAbsoluteRemotePath(file)) file = null;
-  const record: RememberedPath = { directory, file, updatedAt: Math.max(0, Math.trunc(now)) };
+  const record: RememberedPath = { directory, updatedAt: Math.max(0, Math.trunc(now)) };
   try {
     storage.setItem(key, JSON.stringify(record));
   } catch {

@@ -1,6 +1,7 @@
 import type { FileListView } from './file-list-view';
 import { MAX_EDITOR_FILE_SIZE, isEditableTextFile } from './file-language';
 import type { EditorDocument, EditorSaveResult, FileEditor } from './file-editor';
+import { expectedMtimeFor, nextMtimeBaseline } from './editor-mtime';
 // 按主机记住路径的模块在连接成功后才按需加载，首屏不带这段逻辑。
 import type { StorageLike } from './file-paths';
 
@@ -387,6 +388,11 @@ export class FileManager {
     this.resetConnection(false);
   }
 
+  /** 页面即将卸载时用：编辑器里还有没保存（且可能还在 3 秒防抖窗口内）的改动。 */
+  hasUnsavedEditorChanges(): boolean {
+    return this.editor?.isDirty() === true;
+  }
+
   private resetConnection(preserveEditor: boolean): void {
     this.wantConnection = false;
     this.clearReconnectTimer();
@@ -711,7 +717,6 @@ export class FileManager {
       name: request.name,
       content,
       mtime,
-      mode: numberValue(message.mode) ?? 0,
     };
     let editor: FileEditor;
     try {
@@ -732,7 +737,6 @@ export class FileManager {
     this.editor = editor;
     this.editorDocument = document;
     this.elements.panel.append(editor.element);
-    this.rememberEditorFile(document.path);
     editor.focus();
     this.setStatus({ zh: `正在编辑 ${request.name}`, en: `Editing ${request.name}` });
     this.updateControls();
@@ -771,7 +775,8 @@ export class FileManager {
     if (bytes.length > MAX_EDITOR_FILE_SIZE) {
       return reject(this.localize({ zh: '保存失败：内容超过 2 MiB 限制。', en: 'Save failed: the content exceeds the 2 MiB limit.' }));
     }
-    const mtimeCheck = expectedMtime === undefined ? document.mtime : expectedMtime;
+    // 基线未知（上次保存后 stat 失败）时不带 expectedMtime，避免拿旧值误报冲突。
+    const mtimeCheck = expectedMtime === undefined ? expectedMtimeFor(document.mtime) : expectedMtime;
     const requestId = this.createRequest('upload', document.path);
     let resolveSave: (completed: boolean) => void = () => undefined;
     const promise = new Promise<boolean>((resolve) => { resolveSave = resolve; });
@@ -892,14 +897,16 @@ export class FileManager {
 
   private closeEditor(): void {
     if (!this.editor) return;
+    const editor = this.editor;
     // 关掉编辑器后迟到的「以远端为准」读取不再有意义，连 pending 一起丢掉，
     // 否则它的失败会被当成普通错误弹到已经关闭的页面上。
     if (this.reloadRequest) this.pending.delete(this.reloadRequest.requestId);
     this.reloadRequest = null;
-    this.editor.destroy();
     this.editor = null;
     this.editorDocument = null;
+    // 先把「编辑」按钮恢复成可用，destroy() 才把焦点还得到打开编辑器前的元素上。
     this.updateControls();
+    editor.destroy();
   }
 
   /**
@@ -1486,9 +1493,10 @@ export class FileManager {
     const mtime = numberValue(message.mtime);
     const savingEditor = state.editorContent !== undefined;
     if (savingEditor && this.editor && this.editorDocument) {
-      if (mtime !== null) this.editorDocument.mtime = mtime;
+      // stat 是 best-effort：没带回 mtime 时基线记为未知，下次保存不做冲突校验，
+      // 否则会拿打开时的旧值去比对新 mtime，误报「远端已变更」。
+      this.editorDocument.mtime = nextMtimeBaseline(mtime);
       this.editor.markSaved(state.editorContent!, mtime);
-      this.rememberEditorFile(state.path);
     }
     if (savingEditor) this.completeEditorSave(state, true);
     this.setStatus(savingEditor
@@ -1684,12 +1692,7 @@ export class FileManager {
   /** 记录该主机最后成功列出的目录（localStorage 只存主机 id、路径、时间戳）。 */
   private rememberDirectory(directory: string): void {
     if (!this.hostId || !this.paths) return;
-    this.paths.writeRememberedPath(this.pathStorage, this.hostId, { directory });
-  }
-
-  private rememberEditorFile(path: string): void {
-    if (!this.hostId || !this.paths) return;
-    this.paths.writeRememberedPath(this.pathStorage, this.hostId, { directory: this.cwd, file: path });
+    this.paths.writeRememberedPath(this.pathStorage, this.hostId, directory);
   }
 
   /** Notify all registered cwd-change listeners. Listener errors are swallowed. */

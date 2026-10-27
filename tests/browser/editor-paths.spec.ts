@@ -60,16 +60,17 @@ test('上次目录已失效：回落 / 并提示一句', async ({ page }) => {
   expect(await readRecord(page, 'alpha')).toMatchObject({ directory: '/' });
 });
 
-test('打开编辑器记录文件路径，存储里没有凭据', async ({ page }) => {
+test('打开编辑器只记录目录，存储里没有文件路径和凭据', async ({ page }) => {
   await fileFixture(page);
   await connectFiles(page, 'alpha');
   await page.locator('.files-list').getByRole('treeitem', { name: 'README.md', exact: true }).dblclick();
   await expect(page.locator('.file-editor')).toBeVisible();
 
   const record = await readRecord(page, 'alpha');
-  expect(record).toMatchObject({ directory: '/root', file: '/root/README.md' });
+  expect(record).toMatchObject({ directory: '/root' });
+  expect(record).not.toHaveProperty('file');
   const raw = await page.evaluate((key) => localStorage.getItem(key), storageKey('alpha'));
   expect(raw).not.toBeNull();
   expect(raw).not.toContain('password');
-  expect(Object.keys(JSON.parse(raw!)).sort()).toEqual(['directory', 'file', 'updatedAt']);
+  expect(Object.keys(JSON.parse(raw!)).sort()).toEqual(['directory', 'updatedAt']);
 });

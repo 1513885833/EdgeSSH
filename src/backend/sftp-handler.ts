@@ -231,7 +231,6 @@ export class SFTPHandler {
         content,
         size: offset,
         mtime: attrs.mtime ?? 0,
-        mode: attrs.permissions ?? 0,
       });
     } catch (error) {
       this.reportError('read', error, requestId);

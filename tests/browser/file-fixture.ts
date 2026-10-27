@@ -12,7 +12,7 @@ const entry = (name: string, type = 'file', size = 12) => ({
 });
 
 // 只在测试浏览器内模拟 API/协议，不访问真实主机、不增加生产认证绕过。
-export async function fileFixture(page: Page, options: { firstSeen?: boolean; credentialError?: boolean; noHosts?: boolean; holdUpload?: boolean } = {}) {
+export async function fileFixture(page: Page, options: { firstSeen?: boolean; credentialError?: boolean; noHosts?: boolean; holdUpload?: boolean; omitUploadMtime?: boolean } = {}) {
   const hosts = options.noHosts ? [] : [host('alpha', 'Tokyo production', '192.0.2.10'), host('beta', 'Singapore backup', '192.0.2.20')];
   const directories = new Map([
     ['/', [entry('root', 'directory')]],
@@ -97,7 +97,7 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
         if (!file) send({ type: 'sftp_error', requestId, operation: 'read', message: 'No such file' });
         else send({
           type: 'sftp_read_text_result', requestId, path,
-          content: file.content, size: Buffer.byteLength(file.content), mtime: file.mtime, mode: 0o100644,
+          content: file.content, size: Buffer.byteLength(file.content), mtime: file.mtime,
         });
       }
       if (type === 'sftp_upload_start') {
@@ -120,7 +120,11 @@ export async function fileFixture(page: Page, options: { firstSeen?: boolean; cr
           target.content = Buffer.concat(uploaded).toString('utf8');
           target.mtime += 1;
         }
-        send({ type: 'sftp_upload_complete', requestId, size: upload!.size, mtime: target?.mtime });
+        // omitUploadMtime 模拟后端 finishUpload 的 stat 失败：结果里没有 mtime。
+        send({
+          type: 'sftp_upload_complete', requestId, size: upload!.size,
+          ...(options.omitUploadMtime ? {} : { mtime: target?.mtime }),
+        });
       }
       if (type === 'sftp_download') {
         const data = Buffer.from('hello files\n');

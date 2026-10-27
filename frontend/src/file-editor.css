@@ -12,7 +12,8 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
+  /* 固定深色描边：文件页把 --border 重映射成浅色，用变量会和终端 dock 里的编辑器不一致。 */
+  border: 1px solid #253341;
   background: #0d1219;
   color: #e9f0f3;
   font-family: var(--sans);

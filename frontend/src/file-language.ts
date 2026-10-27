@@ -42,7 +42,7 @@ export function isMarkdownFile(name: string): boolean {
   return markdownExtensions.has(extensionOf(name));
 }
 
-/** 未识别的扩展名按纯文本打开（仍可编辑）；白名单之外的扩展名不会进入编辑器。 */
+/** 白名单内没有登记具体语言的扩展名一律按纯文本高亮。 */
 export function editorLanguageFor(name: string): EditorLanguage {
   return languages.get(extensionOf(name)) ?? 'plain';
 }
