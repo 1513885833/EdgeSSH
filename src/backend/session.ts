@@ -1450,11 +1450,17 @@ export class SSHSession {
     if (!this.sftpHandler) throw new Error('SFTP is not initialized');
     const requestId = this.requestId(value.requestId);
     if (type === 'sftp_list') return this.sftpHandler.list(requestId, this.path(value.path));
+    if (type === 'sftp_read_text') return this.sftpHandler.readText(requestId, this.path(value.path));
     if (type === 'sftp_download') return this.sftpHandler.download(requestId, this.path(value.path));
     if (type === 'sftp_upload_start') {
       if (typeof value.size !== 'number') throw new Error('Invalid upload size');
       if (typeof value.overwrite !== 'boolean') throw new Error('Invalid upload overwrite option');
-      return this.sftpHandler.startUpload(requestId, this.path(value.path), value.size, value.overwrite);
+      const expectedMtime = value.expectedMtime;
+      if (expectedMtime !== undefined && expectedMtime !== null
+        && (typeof expectedMtime !== 'number' || !Number.isSafeInteger(expectedMtime) || expectedMtime < 0)) {
+        throw new Error('Invalid expected modification time');
+      }
+      return this.sftpHandler.startUpload(requestId, this.path(value.path), value.size, value.overwrite, expectedMtime);
     }
     if (type === 'sftp_upload_end') return this.sftpHandler.finishUpload(requestId);
     if (type === 'sftp_upload_cancel') return this.sftpHandler.cancelUpload(requestId);
